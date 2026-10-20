@@ -67,6 +67,8 @@ export default function App() {
   const [sync, setSync] = useState<'loading'|'saved'|'saving'|'offline'|'error'>('loading')
   const [lastSync, setLastSync] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
+  const [mobileDockExpanded, setMobileDockExpanded] = useState(false)
+  const [mobileDockOffset, setMobileDockOffset] = useState({ x: 0, y: 0 })
   const [showWorkspace, setShowWorkspace] = useState(false)
   const [preview, setPreview] = useState(false)
   const [theme, setTheme] = useState(() => {
@@ -81,6 +83,8 @@ export default function App() {
   const firstSync = useRef(true)
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
   const serverUpdated = useRef<number>(0)
+  const mobileDockDrag = useRef({ startX: 0, startY: 0, initialX: 0, initialY: 0, moved: false })
+  const suppressDockClick = useRef(false)
 
   useEffect(() => {
     localStorage.setItem('note-packet-theme', theme)
@@ -271,6 +275,41 @@ export default function App() {
   const themeOptions = [{ value: 'default', label: 'Green default' }, { value: 'minimalist', label: 'Minimalist' }, { value: 'claude', label: 'Claude' }, { value: 'chatgpt', label: 'ChatGPT' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'high-contrast', label: 'High contrast' }]
   const isDarkTheme = themeMode === 'dark'
   const toggleTheme = () => setThemeMode(mode => mode === 'dark' ? 'light' : 'dark')
+  const handleDockPointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    mobileDockDrag.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      initialX: mobileDockOffset.x,
+      initialY: mobileDockOffset.y,
+      moved: false
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const handleDockPointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+    const drag = mobileDockDrag.current
+    const deltaX = event.clientX - drag.startX
+    const deltaY = event.clientY - drag.startY
+    if (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4) drag.moved = true
+    if (!drag.moved) return
+    const maxX = Math.max(0, window.innerWidth - 76)
+    const maxY = Math.max(0, window.innerHeight - 76)
+    setMobileDockOffset({
+      x: Math.min(0, Math.max(-maxX, drag.initialX + deltaX)),
+      y: Math.min(0, Math.max(-maxY, drag.initialY + deltaY))
+    })
+  }
+  const handleDockPointerUp = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    if (mobileDockDrag.current.moved) {
+      suppressDockClick.current = true
+      window.setTimeout(() => { suppressDockClick.current = false }, 0)
+    }
+  }
+  const toggleMobileDock = () => {
+    if (suppressDockClick.current) return
+    setMobileDockExpanded(expanded => !expanded)
+  }
   const markdownPreview = useRef<HTMLElement>(null)
   useEffect(() => {
     if (!preview || !markdownPreview.current) return
@@ -312,7 +351,10 @@ export default function App() {
       {activePage && <article className="print-note"><h1>{activePage.title || 'Untitled'}</h1><div dangerouslySetInnerHTML={{ __html: markdownHtml }} /></article>}
       <footer className="print-footer"><span className="print-logo">n.</span><span>Note Packet · <a href="https://notepacket.vercel.app">notepacket.vercel.app</a> · Developed by <a href="https://github.com/Dharaneesh20">Dharaneesh20</a></span></footer>
     </main>
-    <nav className="mobile-dock" aria-label="Mobile actions"><button onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={19}/><span>Explorer</span></button><button onClick={() => ask('page')} disabled={!activeUser} aria-label="New page"><Plus size={20}/><span>New</span></button><button onClick={toggleTheme} aria-label="Toggle theme">{isDarkTheme ? <Sun size={19}/> : <Moon size={19}/>}<span>Theme</span></button>{activePage && <button onClick={() => window.print()} aria-label="Download PDF"><Download size={19}/><span>PDF</span></button>}</nav>
+    <nav className={`mobile-dock ${mobileDockExpanded ? 'expanded' : ''}`} style={{ transform: `translate(${mobileDockOffset.x}px, ${mobileDockOffset.y}px)` }} onPointerDown={handleDockPointerDown} onPointerMove={handleDockPointerMove} onPointerUp={handleDockPointerUp} aria-label="Mobile actions">
+      <button className="mobile-dock-toggle" onClick={toggleMobileDock} aria-label={mobileDockExpanded ? 'Collapse mobile actions' : 'Expand mobile actions'}><MoreHorizontal size={21}/></button>
+      {mobileDockExpanded && <><button onClick={() => { setMobileNav(true); setMobileDockExpanded(false) }} aria-label="Open navigation"><Menu size={19}/><span>Explorer</span></button><button onClick={() => { ask('page'); setMobileDockExpanded(false) }} disabled={!activeUser} aria-label="New page"><Plus size={20}/><span>New</span></button><button onClick={() => { toggleTheme(); setMobileDockExpanded(false) }} aria-label="Toggle theme">{isDarkTheme ? <Sun size={19}/> : <Moon size={19}/>}<span>Theme</span></button>{activePage && <button onClick={() => { window.print(); setMobileDockExpanded(false) }} aria-label="Download PDF"><Download size={19}/><span>PDF</span></button>}</>}
+    </nav>
     {dialog && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDialog(null) }}><div className="modal"><div className="modal-head"><h3>{({user:'New user',folder:'New folder',page:'New page','rename-user':'Rename user','rename-folder':'Rename folder','rename-page':'Rename page','delete-page':'Delete this page?','delete-folder':'Delete this folder?','delete-user':'Delete this user?','folder-menu':'Folder options','user-menu':'Profile options','set-pin':'Set safety PIN'} as Record<string,string>)[dialog.kind] || 'Confirm'}</h3><button className="icon-btn" onClick={() => setDialog(null)}><X size={17}/></button></div>
       {dialog.kind === 'folder-menu' ? <div className="modal-actions vertical"><button onClick={() => { const f = activeUser?.folders.find(f => f.id === dialog.value); setDialog({kind:'rename-folder',value:f?.name || ''}) }}><Pencil size={15}/> Rename folder</button><button className="danger-text" onClick={() => setDialog({kind:'delete-folder'})}><Trash2 size={15}/> Delete folder</button></div> :
       dialog.kind === 'user-menu' ? <div className="modal-actions vertical"><button onClick={() => { const u = data.users.find(u => u.id === dialog.value); setDialog({kind:'rename-user',value:u?.name || ''}) }}><Pencil size={15}/> Rename profile</button><button onClick={() => setDialog({kind:'set-pin',value:dialog.value})}>Set or change safety PIN</button><button className="danger-text" onClick={() => setDialog({kind:'delete-user',value:dialog.value})}><Trash2 size={15}/> Delete profile</button></div> :
