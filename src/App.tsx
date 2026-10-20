@@ -72,7 +72,7 @@ export default function App() {
     localStorage.setItem('note-packet-theme', darkMode ? 'dark' : 'light')
   }, [darkMode])
 
-  const activeUser = data.users.find(u => u.id === params.userId) || data.users[0]
+  const activeUser = data.users.find(u => u.id === params.userId)
   const activeFolder = activeUser?.folders.find(f => f.id === params.folderId) || activeUser?.folders[0]
   const activePage = activeFolder?.pages.find(p => p.id === params.pageId) || activeFolder?.pages[0]
   const route = (u = activeUser, f?: NoteFolder, p?: Page) => u ? routeFor(u, f, p) : '/'
@@ -148,8 +148,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!activeUser) navigate('/', { replace: true })
-    else if (!params.userId || !params.folderId || !params.pageId) {
+    if (activeUser && (!params.userId || !params.folderId || !params.pageId)) {
       navigate(route(activeUser, activeFolder, activePage), { replace: true })
     }
   }, [activeUser?.id, activeFolder?.id, activePage?.id, params.userId, params.folderId, params.pageId])
@@ -240,6 +239,13 @@ export default function App() {
   const statusText = ({loading:'Connecting', saved:'Synced', saving:'Saving…', offline:'Offline · local copy', error:'Sync failed · local copy'} as const)[sync]
 
   const toggleTheme = () => setDarkMode(value => !value)
+
+  if (!activeUser) return <div className={`profile-picker ${darkMode ? 'dark-mode' : ''}`}>
+    <div className="profile-picker-top"><div className="brand-mark">n.</div><button className="theme-picker-btn" onClick={toggleTheme} aria-label="Toggle dark mode">{darkMode ? <Sun size={18}/> : <Moon size={18}/>}</button></div>
+    <div className="profile-picker-content"><span className="eyebrow">NOTE PACKET</span><h1>Who's using Note Packet?</h1><p>Select a profile to open its folders and notes.</p><div className="profile-grid">{data.users.map(user => <button key={user.id} className="profile-card" onClick={() => navigate(routeFor(user))}><span className="profile-avatar">{user.name.slice(0, 1).toUpperCase()}</span><strong>{user.name}</strong><small>{user.folders.length} {user.folders.length === 1 ? 'folder' : 'folders'}</small></button>)}<button className="profile-card profile-add" onClick={() => ask('user')}><Plus size={25}/><strong>Add profile</strong><small>Create a shared profile</small></button></div></div>
+    <footer className="profile-picker-footer">Developed by <a href="https://github.com/Dharaneesh20" target="_blank" rel="noreferrer"><Github size={13}/> Dharaneesh20</a></footer>
+    {dialog && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDialog(null) }}><div className="modal"><div className="modal-head"><h3>New user</h3><button className="icon-btn" onClick={() => setDialog(null)}><X size={17}/></button></div><form onSubmit={e => { e.preventDefault(); submitDialog() }}><input autoFocus className="modal-input" value={dialog.value || ''} onChange={e => setDialog(d => d ? {...d,value:e.target.value} : d)} placeholder="e.g. Personal" maxLength={80}/><input className="modal-input pin-input" type="password" inputMode="numeric" pattern="\d{4}|\d{6}" maxLength={6} value={dialog.pin || ''} onChange={e => setDialog(d => d ? {...d,pin:e.target.value.replace(/\D/g, '')} : d)} placeholder="4 or 6 digit safety PIN" aria-label="Safety PIN"/><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setDialog(null)}>Cancel</button><button type="submit" className="solid-btn"><Check size={15}/> Save</button></div></form></div></div>}
+  </div>
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
