@@ -100,8 +100,12 @@ export default function App() {
         setLastSync('Connected')
         firstSync.current = false
       })
-      .catch(() => {
-        if (!cancelled) { setSync('offline'); firstSync.current = false }
+      .catch(error => {
+        if (!cancelled) {
+          setSync('error')
+          firstSync.current = false
+          setToast(error instanceof Error ? error.message : 'MongoDB sync is unavailable.')
+        }
       })
     return () => { cancelled = true }
   }, [workspace, persistLocal])
@@ -122,7 +126,10 @@ export default function App() {
         if (!response.ok) throw new Error(body.error || 'Sync failed')
         setSync('saved'); setLastSync(new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}))
         serverUpdated.current = next.updatedAt
-      } catch { setSync('error') }
+      } catch (error) {
+        setSync('error')
+        setToast(error instanceof Error ? error.message : 'MongoDB sync failed. Your local copy is still available.')
+      }
     }, 650)
     return () => { if (pending.current) clearTimeout(pending.current) }
   }, [data, workspace, persistLocal])

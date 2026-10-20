@@ -13,15 +13,28 @@ function getMongoClient() {
   const uri = process.env.MONGODB_URI
   if (!uri) throw new Error('MONGODB_URI is not configured')
   if (!globalForMongo.pocketNotesMongo) {
-    globalForMongo.pocketNotesMongo = new MongoClient(uri, {
+    const connection = new MongoClient(uri, {
       maxPoolSize: 5,
       minPoolSize: 0,
       maxIdleTimeMS: 30_000,
       connectTimeoutMS: 10_000,
       serverSelectionTimeoutMS: 5_000
     }).connect()
+    globalForMongo.pocketNotesMongo = connection.catch(error => {
+      globalForMongo.pocketNotesMongo = undefined
+      throw error
+    })
   }
   return globalForMongo.pocketNotesMongo
+}
+
+function isMongoConnectionError(error: unknown) {
+  if (!error || typeof error !== 'object') return false
+  const name = 'name' in error ? String(error.name) : ''
+  return name.includes('MongoServerSelection') ||
+    name.includes('MongoNetwork') ||
+    name.includes('MongoAuthentication') ||
+    name.includes('MongoParse')
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -71,6 +84,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ ok: true, updatedAt })
   } catch (error) {
     console.error('Note Packet storage error:', error)
+    if (isMongoConnectionError(error)) {
+      return res.status(503).json({
+        error: 'MongoDB connection failed. Check the Atlas database user, MONGODB_URI, and Network Access rules.'
+      })
+    }
     return res.status(500).json({ error: 'Storage request failed. Your local copy is still available.' })
   }
 }
