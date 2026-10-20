@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import DOMPurify from 'dompurify'
-import { Archive, Check, ChevronDown, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Download, FilePlus2, Folder, FolderPlus, Menu, MoreHorizontal, Pencil, Plus, Search, Settings2, Trash2, Upload, Users, X } from 'lucide-react'
+import { Archive, Check, ChevronDown, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Download, FilePlus2, Folder, FolderPlus, Github, Menu, Moon, MoreHorizontal, Pencil, Plus, Search, Settings2, Sun, Trash2, Upload, Users, X } from 'lucide-react'
 import { marked } from 'marked'
 import type { Notebook, User, Folder as NoteFolder, Page } from './types'
 import { newId, starterNotebook } from './types'
@@ -59,12 +59,17 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(false)
   const [showWorkspace, setShowWorkspace] = useState(false)
   const [preview, setPreview] = useState(false)
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('note-packet-theme') === 'dark')
   const [dialog, setDialog] = useState<{kind: string; value?: string; pin?: string} | null>(null)
   const [toast, setToast] = useState('')
   const editor = useRef<HTMLTextAreaElement>(null)
   const firstSync = useRef(true)
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null)
   const serverUpdated = useRef<number>(0)
+
+  useEffect(() => {
+    localStorage.setItem('note-packet-theme', darkMode ? 'dark' : 'light')
+  }, [darkMode])
 
   const activeUser = data.users.find(u => u.id === params.userId) || data.users[0]
   const activeFolder = activeUser?.folders.find(f => f.id === params.folderId) || activeUser?.folders[0]
@@ -233,7 +238,9 @@ export default function App() {
   const statusIcon = sync === 'saved' ? <Cloud size={14}/> : sync === 'saving' || sync === 'loading' ? <span className="spinner"/> : <CloudOff size={14}/>
   const statusText = ({loading:'Connecting', saved:'Synced', saving:'Saving…', offline:'Offline · local copy', error:'Sync failed · local copy'} as const)[sync]
 
-  return <div className="app-shell">
+  const toggleTheme = () => setDarkMode(value => !value)
+
+  return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
       <div className="brand"><div className="brand-mark">n.</div><div><strong>Note Packet</strong><small>PERSONAL WORKSPACE</small></div><button className="icon-btn mobile-close" onClick={() => setMobileNav(false)} aria-label="Close menu"><X size={18}/></button></div>
       <div className="workspace-label"><span>WORKSPACE</span><button className="text-btn" onClick={() => setShowWorkspace(v => !v)}><Settings2 size={14}/> Link</button></div>
@@ -243,7 +250,7 @@ export default function App() {
       <div className="section-head folders-head"><span>FOLDERS</span><button className="icon-btn" onClick={() => ask('folder')} title="New folder" disabled={!activeUser}><FolderPlus size={16}/></button></div>
       <div className="folder-list">{activeUser?.folders.map(f => <div key={f.id} className={`folder-item ${activeFolder?.id === f.id ? 'selected' : ''}`}><Link to={route(activeUser, f)} onClick={() => setMobileNav(false)}><Folder size={15}/><span>{f.name}</span><small>{f.pages.length}</small></Link><button className="mini-btn" title="Folder options" onClick={() => ask('folder-menu', f.id)}><MoreHorizontal size={16}/></button></div>)}</div>
       <button className="new-page-btn" onClick={() => ask('page')} disabled={!activeUser}><FilePlus2 size={16}/> New page <span>↵</span></button>
-      <div className="sidebar-bottom"><div className="sync-status">{statusIcon}<span>{statusText}</span></div><div className="side-actions"><button onClick={exportData}><Download size={14}/> Export</button><label><Upload size={14}/> Import<input type="file" accept="application/json,.json" hidden onChange={e => importData(e.target.files?.[0])}/></label></div><div className="credit">Developed by <a href="https://github.com/Dharaneesh20" target="_blank" rel="noreferrer">Dharaneesh20</a></div></div>
+      <div className="sidebar-bottom"><div className="sync-status">{statusIcon}<span>{statusText}</span></div><div className="side-actions"><button onClick={exportData}><Download size={14}/> Export</button><label><Upload size={14}/> Import<input type="file" accept="application/json,.json" hidden onChange={e => importData(e.target.files?.[0])}/></label><button onClick={toggleTheme} title="Toggle dark mode">{darkMode ? <Sun size={14}/> : <Moon size={14}/>} {darkMode ? 'Light' : 'Dark'}</button></div><div className="credit">Developed by <a href="https://github.com/Dharaneesh20" target="_blank" rel="noreferrer"><Github size={12}/> Dharaneesh20</a></div></div>
     </aside>
     {mobileNav && <button className="scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation"/>}
     <main className="main">
@@ -265,6 +272,7 @@ export default function App() {
       {activePage && <article className="print-note"><h1>{activePage.title || 'Untitled'}</h1><div dangerouslySetInnerHTML={{ __html: markdownHtml }} /></article>}
       <footer className="print-footer"><span className="print-logo">n.</span><span>Note Packet · <a href="https://notepacket.vercel.app">notepacket.vercel.app</a> · Developed by <a href="https://github.com/Dharaneesh20">Dharaneesh20</a></span></footer>
     </main>
+    <nav className="mobile-dock" aria-label="Mobile actions"><button onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={19}/><span>Menu</span></button><button onClick={() => ask('page')} disabled={!activeUser} aria-label="New page"><Plus size={20}/><span>New</span></button><button onClick={toggleTheme} aria-label="Toggle dark mode">{darkMode ? <Sun size={19}/> : <Moon size={19}/>}<span>{darkMode ? 'Light' : 'Dark'}</span></button>{activePage && <button onClick={() => window.print()} aria-label="Download PDF"><Download size={19}/><span>PDF</span></button>}</nav>
     {dialog && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDialog(null) }}><div className="modal"><div className="modal-head"><h3>{({user:'New user',folder:'New folder',page:'New page','rename-user':'Rename user','rename-folder':'Rename folder','rename-page':'Rename page','delete-page':'Delete this page?','delete-folder':'Delete this folder?','delete-user':'Delete this user?','folder-menu':'Folder options','user-menu':'Profile options','set-pin':'Set safety PIN'} as Record<string,string>)[dialog.kind] || 'Confirm'}</h3><button className="icon-btn" onClick={() => setDialog(null)}><X size={17}/></button></div>
       {dialog.kind === 'folder-menu' ? <div className="modal-actions vertical"><button onClick={() => { const f = activeUser?.folders.find(f => f.id === dialog.value); setDialog({kind:'rename-folder',value:f?.name || ''}) }}><Pencil size={15}/> Rename folder</button><button className="danger-text" onClick={() => setDialog({kind:'delete-folder'})}><Trash2 size={15}/> Delete folder</button></div> :
       dialog.kind === 'user-menu' ? <div className="modal-actions vertical"><button onClick={() => { const u = data.users.find(u => u.id === dialog.value); setDialog({kind:'rename-user',value:u?.name || ''}) }}><Pencil size={15}/> Rename profile</button><button onClick={() => setDialog({kind:'set-pin',value:dialog.value})}>Set or change safety PIN</button><button className="danger-text" onClick={() => setDialog({kind:'delete-user',value:dialog.value})}><Trash2 size={15}/> Delete profile</button></div> :
