@@ -1,0 +1,10 @@
+{
+  "name": "Pocket Notes",
+  "short_name": "Notes",
+  "description": "A tiny personal notebook",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f5f0",
+  "theme_color": "#f5f5f0",
+  "icons": []
+}
