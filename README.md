@@ -1,4 +1,4 @@
-# Pocket Notes — Vercel-only personal notebook
+# Note Packet — notepacket.vercel.app
 
 A minimal Markdown notebook with named workspaces, folders, pages, autosave, JSON backup/restore, and cross-device sync. The frontend is a static Vite app; a Vercel Function writes notebook data to MongoDB Atlas.
 
@@ -33,6 +33,7 @@ For local API testing, install the Vercel CLI, connect the project to Vercel, pu
 ## Features
 
 - No accounts, passwords, or sign-in.
+- User profiles can be protected with a 4- or 6-digit safety PIN; deleting a profile requires its PIN.
 - Users are organizational profiles, not authenticated identities.
 - Folder and page CRUD.
 - Markdown editing with a sanitized preview, clipboard copy, and download.

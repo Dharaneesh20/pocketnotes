@@ -70,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     )
     return res.status(200).json({ ok: true, updatedAt })
   } catch (error) {
-    console.error('Pocket Notes storage error:', error)
+    console.error('Note Packet storage error:', error)
     return res.status(500).json({ error: 'Storage request failed. Your local copy is still available.' })
   }
 }

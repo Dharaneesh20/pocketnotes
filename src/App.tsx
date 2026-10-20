@@ -12,6 +12,11 @@ const randomWorkspace = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(24))
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
 }
+const validPin = (pin: string) => /^\d{4}(\d{2})?$/.test(pin)
+const hashPin = async (pin: string) => {
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
+  return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')
+}
 function getWorkspace() {
   const params = new URLSearchParams(window.location.search)
   let key = params.get('workspace') || localStorage.getItem(WORKSPACE_KEY)
@@ -54,7 +59,7 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(false)
   const [showWorkspace, setShowWorkspace] = useState(false)
   const [preview, setPreview] = useState(false)
-  const [dialog, setDialog] = useState<{kind: string; value?: string} | null>(null)
+  const [dialog, setDialog] = useState<{kind: string; value?: string; pin?: string} | null>(null)
   const [toast, setToast] = useState('')
   const editor = useRef<HTMLTextAreaElement>(null)
   const firstSync = useRef(true)
@@ -146,14 +151,21 @@ export default function App() {
     }) }))
   }
   const ask = (kind: string, value = '') => setDialog({ kind, value })
-  const submitDialog = () => {
+  const submitDialog = async () => {
     if (!dialog) return
     const name = dialog.value?.trim()
     if (dialog.kind === 'user' && name) {
-      const u: User = { id: newId(), name, folders: [{ id: newId(), name: 'Notes', pages: [] }] }
+      if (!validPin(dialog.pin || '')) { setToast('PIN must be exactly 4 or 6 digits.'); return }
+      const u: User = { id: newId(), name, pinHash: await hashPin(dialog.pin || ''), folders: [{ id: newId(), name: 'Notes', pages: [] }] }
       updateData(d => ({ ...d, users: [...d.users, u] })); navigate(routeFor(u, u.folders[0])); setDialog(null); return
     }
     if (!activeUser) return
+    if (dialog.kind === 'set-pin') {
+      if (!validPin(dialog.pin || '')) { setToast('PIN must be exactly 4 or 6 digits.'); return }
+      const pinHash = await hashPin(dialog.pin || '')
+      updateData(d => ({ ...d, users: d.users.map(u => u.id === dialog.value ? { ...u, pinHash } : u) }))
+      setDialog(null); setToast('Safety PIN saved.'); return
+    }
     if (dialog.kind === 'folder' && name) {
       const f: NoteFolder = { id: newId(), name, pages: [] }
       updateData(d => ({ ...d, users: d.users.map(u => u.id === activeUser.id ? { ...u, folders: [...u.folders, f] } : u) }))
@@ -180,7 +192,11 @@ export default function App() {
       navigate(remaining[0] ? route(activeUser, remaining[0]) : route(activeUser)); setDialog(null); return
     }
     if (dialog.kind === 'delete-user') {
-      const remaining = data.users.filter(u => u.id !== activeUser.id)
+      const targetUser = data.users.find(u => u.id === dialog.value)
+      if (!targetUser) return
+      if (!targetUser.pinHash) { setToast('Set a safety PIN before deleting this profile.'); setDialog({ kind: 'set-pin', value: targetUser.id }); return }
+      if (!dialog.pin || await hashPin(dialog.pin) !== targetUser.pinHash) { setToast('Incorrect safety PIN.'); return }
+      const remaining = data.users.filter(u => u.id !== targetUser.id)
       updateData(d => ({ ...d, users: remaining }))
       navigate(remaining[0] ? routeFor(remaining[0]) : '/'); setDialog(null); return
     }
@@ -192,7 +208,7 @@ export default function App() {
     setTimeout(() => setToast(''), 2400)
   }
   const shareWorkspace = `${location.pathname}?workspace=${workspace}`
-  const exportData = () => downloadText(`pocket-notes-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data, null, 2), 'application/json')
+  const exportData = () => downloadText(`note-packet-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data, null, 2), 'application/json')
   const importData = (file?: File) => {
     if (!file) return
     const reader = new FileReader()
@@ -212,11 +228,11 @@ export default function App() {
 
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
-      <div className="brand"><div className="brand-mark">p.</div><div><strong>Pocket Notes</strong><small>PERSONAL WORKSPACE</small></div><button className="icon-btn mobile-close" onClick={() => setMobileNav(false)} aria-label="Close menu"><X size={18}/></button></div>
+      <div className="brand"><div className="brand-mark">n.</div><div><strong>Note Packet</strong><small>PERSONAL WORKSPACE</small></div><button className="icon-btn mobile-close" onClick={() => setMobileNav(false)} aria-label="Close menu"><X size={18}/></button></div>
       <div className="workspace-label"><span>WORKSPACE</span><button className="text-btn" onClick={() => setShowWorkspace(v => !v)}><Settings2 size={14}/> Link</button></div>
       {showWorkspace && <div className="workspace-box"><p>Use this private link on your other devices to access the same notebook.</p><button className="outline-btn full" onClick={() => copy(`${window.location.origin}/?workspace=${workspace}`, 'Workspace link copied')}><Copy size={14}/> Copy workspace link</button><p className="warning">Anyone with this link can access and edit your notes. Keep it private.</p></div>}
       <div className="section-head"><span>USERS</span><button className="icon-btn" onClick={() => ask('user')} title="New user"><Plus size={16}/></button></div>
-      <div className="user-list">{data.users.map(u => <Link key={u.id} to={routeFor(u)} onClick={() => setMobileNav(false)} className={`user-item ${activeUser?.id === u.id ? 'selected' : ''}`}><Users size={15}/><span>{u.name}</span>{activeUser?.id === u.id && <ChevronDown size={14}/>}</Link>)}</div>
+      <div className="user-list">{data.users.map(u => <div key={u.id} className={`user-row ${activeUser?.id === u.id ? 'selected' : ''}`}><Link to={routeFor(u)} onClick={() => setMobileNav(false)} className="user-item"><Users size={15}/><span>{u.name}</span>{activeUser?.id === u.id && <ChevronDown size={14}/>}</Link><button className="mini-btn" title="Profile options" onClick={() => ask('user-menu', u.id)}><MoreHorizontal size={16}/></button></div>)}</div>
       <div className="section-head folders-head"><span>FOLDERS</span><button className="icon-btn" onClick={() => ask('folder')} title="New folder" disabled={!activeUser}><FolderPlus size={16}/></button></div>
       <div className="folder-list">{activeUser?.folders.map(f => <div key={f.id} className={`folder-item ${activeFolder?.id === f.id ? 'selected' : ''}`}><Link to={route(activeUser, f)} onClick={() => setMobileNav(false)}><Folder size={15}/><span>{f.name}</span><small>{f.pages.length}</small></Link><button className="mini-btn" title="Folder options" onClick={() => ask('folder-menu', f.id)}><MoreHorizontal size={16}/></button></div>)}</div>
       <button className="new-page-btn" onClick={() => ask('page')} disabled={!activeUser}><FilePlus2 size={16}/> New page <span>↵</span></button>
@@ -239,10 +255,11 @@ export default function App() {
         </section>
       </div>
     </main>
-    {dialog && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDialog(null) }}><div className="modal"><div className="modal-head"><h3>{({user:'New user',folder:'New folder',page:'New page','rename-user':'Rename user','rename-folder':'Rename folder','rename-page':'Rename page','delete-page':'Delete this page?','delete-folder':'Delete this folder?','delete-user':'Delete this user?','folder-menu':'Folder options'} as Record<string,string>)[dialog.kind] || 'Confirm'}</h3><button className="icon-btn" onClick={() => setDialog(null)}><X size={17}/></button></div>
+    {dialog && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDialog(null) }}><div className="modal"><div className="modal-head"><h3>{({user:'New user',folder:'New folder',page:'New page','rename-user':'Rename user','rename-folder':'Rename folder','rename-page':'Rename page','delete-page':'Delete this page?','delete-folder':'Delete this folder?','delete-user':'Delete this user?','folder-menu':'Folder options','user-menu':'Profile options','set-pin':'Set safety PIN'} as Record<string,string>)[dialog.kind] || 'Confirm'}</h3><button className="icon-btn" onClick={() => setDialog(null)}><X size={17}/></button></div>
       {dialog.kind === 'folder-menu' ? <div className="modal-actions vertical"><button onClick={() => { const f = activeUser?.folders.find(f => f.id === dialog.value); setDialog({kind:'rename-folder',value:f?.name || ''}) }}><Pencil size={15}/> Rename folder</button><button className="danger-text" onClick={() => setDialog({kind:'delete-folder'})}><Trash2 size={15}/> Delete folder</button></div> :
-      ['delete-page','delete-folder','delete-user'].includes(dialog.kind) ? <><p className="modal-copy">{dialog.kind === 'delete-page' ? 'This page and its content will be permanently deleted.' : dialog.kind === 'delete-folder' ? 'This folder and all pages inside it will be permanently deleted.' : 'This user and all their folders and pages will be permanently deleted.'}</p><div className="modal-actions"><button className="outline-btn" onClick={() => setDialog(null)}>Cancel</button><button className="solid-btn danger-btn" onClick={submitDialog}><Trash2 size={15}/> Delete</button></div></> :
-      <form onSubmit={e => { e.preventDefault(); submitDialog() }}><input autoFocus className="modal-input" value={dialog.value || ''} onChange={e => setDialog(d => d ? {...d,value:e.target.value} : d)} placeholder={dialog.kind === 'user' ? 'e.g. Personal' : dialog.kind === 'folder' ? 'e.g. College' : dialog.kind === 'page' ? 'e.g. Quick snippet' : 'Enter a name'} maxLength={80}/><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setDialog(null)}>Cancel</button><button type="submit" className="solid-btn"><Check size={15}/> Save</button></div></form>}</div></div>}
+      dialog.kind === 'user-menu' ? <div className="modal-actions vertical"><button onClick={() => { const u = data.users.find(u => u.id === dialog.value); setDialog({kind:'rename-user',value:u?.name || ''}) }}><Pencil size={15}/> Rename profile</button><button onClick={() => setDialog({kind:'set-pin',value:dialog.value})}>Set or change safety PIN</button><button className="danger-text" onClick={() => setDialog({kind:'delete-user',value:dialog.value})}><Trash2 size={15}/> Delete profile</button></div> :
+      ['delete-page','delete-folder'].includes(dialog.kind) ? <><p className="modal-copy">{dialog.kind === 'delete-page' ? 'This page and its content will be permanently deleted.' : 'This folder and all pages inside it will be permanently deleted.'}</p><div className="modal-actions"><button className="outline-btn" onClick={() => setDialog(null)}>Cancel</button><button className="solid-btn danger-btn" onClick={submitDialog}><Trash2 size={15}/> Delete</button></div></> :
+      <form onSubmit={e => { e.preventDefault(); submitDialog() }}>{['user','rename-user','folder','page','rename-folder','rename-page'].includes(dialog.kind) && <input autoFocus className="modal-input" value={dialog.value || ''} onChange={e => setDialog(d => d ? {...d,value:e.target.value} : d)} placeholder={dialog.kind === 'user' ? 'e.g. Personal' : dialog.kind === 'folder' ? 'e.g. College' : dialog.kind === 'page' ? 'e.g. Quick snippet' : 'Enter a name'} maxLength={80}/>} {['user','set-pin','delete-user'].includes(dialog.kind) && <input autoFocus={dialog.kind !== 'user'} className="modal-input pin-input" type="password" inputMode="numeric" pattern="\d{4}|\d{6}" maxLength={6} value={dialog.pin || ''} onChange={e => setDialog(d => d ? {...d,pin:e.target.value.replace(/\D/g, '')} : d)} placeholder={dialog.kind === 'delete-user' ? 'Enter safety PIN' : '4 or 6 digit safety PIN'} aria-label="Safety PIN"/>}<div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setDialog(null)}>Cancel</button><button type="submit" className="solid-btn"><Check size={15}/> Save</button></div></form>}</div></div>}
     {toast && <div className="toast"><Check size={15}/>{toast}</div>}
   </div>
 }
