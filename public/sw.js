@@ -1,5 +1,5 @@
 const CACHE = 'pocket-notes-shell-v1'
-const SHELL = ['/', '/index.html', '/manifest.webmanifest']
+const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg']
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()))
 })

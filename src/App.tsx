@@ -70,7 +70,7 @@ export default function App() {
   const [mobileDockExpanded, setMobileDockExpanded] = useState(false)
   const [mobileDockOffset, setMobileDockOffset] = useState({ x: 0, y: 0 })
   const [showWorkspace, setShowWorkspace] = useState(false)
-  const [preview, setPreview] = useState(false)
+  const [preview, setPreview] = useState(true)
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('note-packet-theme')
     return saved && ['default', 'minimalist', 'claude', 'chatgpt', 'cyberpunk', 'high-contrast'].includes(saved) ? saved : 'default'

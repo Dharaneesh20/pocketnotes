@@ -3,8 +3,19 @@
   "short_name": "Note Packet",
   "description": "A tiny personal Markdown notebook",
   "start_url": "/",
+  "id": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#f5f5f0",
   "theme_color": "#f5f5f0",
-  "icons": []
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "38x39",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }
