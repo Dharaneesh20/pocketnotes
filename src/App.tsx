@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import DOMPurify from 'dompurify'
 import { Archive, Check, ChevronDown, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Download, FilePlus2, Folder, FolderPlus, Menu, MoreHorizontal, Pencil, Plus, Search, Settings2, Trash2, Upload, Users, X } from 'lucide-react'
+import { marked } from 'marked'
 import type { Notebook, User, Folder as NoteFolder, Page } from './types'
 import { newId, starterNotebook } from './types'
 
@@ -51,6 +53,7 @@ export default function App() {
   const [filter, setFilter] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
   const [showWorkspace, setShowWorkspace] = useState(false)
+  const [preview, setPreview] = useState(false)
   const [dialog, setDialog] = useState<{kind: string; value?: string} | null>(null)
   const [toast, setToast] = useState('')
   const editor = useRef<HTMLTextAreaElement>(null)
@@ -203,6 +206,7 @@ export default function App() {
 
   const allPages = activeUser?.folders.flatMap(f => f.pages.map(p => ({...p, folderName: f.name, folderId: f.id}))) || []
   const filteredPages = allPages.filter(p => !filter || `${p.title} ${p.content} ${p.folderName}`.toLowerCase().includes(filter.toLowerCase()))
+  const markdownHtml = activePage ? DOMPurify.sanitize(marked.parse(activePage.content, { async: false })) : ''
   const statusIcon = sync === 'saved' ? <Cloud size={14}/> : sync === 'saving' || sync === 'loading' ? <span className="spinner"/> : <CloudOff size={14}/>
   const statusText = ({loading:'Connecting', saved:'Synced', saving:'Saving…', offline:'Offline · local copy', error:'Sync failed · local copy'} as const)[sync]
 
@@ -216,7 +220,7 @@ export default function App() {
       <div className="section-head folders-head"><span>FOLDERS</span><button className="icon-btn" onClick={() => ask('folder')} title="New folder" disabled={!activeUser}><FolderPlus size={16}/></button></div>
       <div className="folder-list">{activeUser?.folders.map(f => <div key={f.id} className={`folder-item ${activeFolder?.id === f.id ? 'selected' : ''}`}><Link to={route(activeUser, f)} onClick={() => setMobileNav(false)}><Folder size={15}/><span>{f.name}</span><small>{f.pages.length}</small></Link><button className="mini-btn" title="Folder options" onClick={() => ask('folder-menu', f.id)}><MoreHorizontal size={16}/></button></div>)}</div>
       <button className="new-page-btn" onClick={() => ask('page')} disabled={!activeUser}><FilePlus2 size={16}/> New page <span>↵</span></button>
-      <div className="sidebar-bottom"><div className="sync-status">{statusIcon}<span>{statusText}</span></div><div className="side-actions"><button onClick={exportData}><Download size={14}/> Export</button><label><Upload size={14}/> Import<input type="file" accept="application/json,.json" hidden onChange={e => importData(e.target.files?.[0])}/></label></div></div>
+      <div className="sidebar-bottom"><div className="sync-status">{statusIcon}<span>{statusText}</span></div><div className="side-actions"><button onClick={exportData}><Download size={14}/> Export</button><label><Upload size={14}/> Import<input type="file" accept="application/json,.json" hidden onChange={e => importData(e.target.files?.[0])}/></label></div><div className="credit">Developed by <a href="https://github.com/Dharaneesh20" target="_blank" rel="noreferrer">Dharaneesh20</a></div></div>
     </aside>
     {mobileNav && <button className="scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation"/>}
     <main className="main">
@@ -231,7 +235,7 @@ export default function App() {
           <div className="list-footer">{allPages.length} {allPages.length === 1 ? 'page' : 'pages'} total</div>
         </div>
         <section className="editor-panel">
-          {activePage ? <><div className="editor-heading"><input className="title-input" value={activePage.title} onChange={e => updatePage('title', e.target.value)} placeholder="Untitled page" aria-label="Page title"/><div className="editor-tools"><button className="outline-btn" onClick={() => ask('rename-page')}><Pencil size={14}/> Rename</button><button className="icon-btn danger-icon" onClick={() => ask('delete-page')} title="Delete page"><Trash2 size={16}/></button></div></div><div className="editor-meta"><span>PLAIN TEXT</span><span>·</span><span>{activePage.content.length.toLocaleString()} characters</span><span className="meta-spacer"/><button className="text-btn" onClick={() => copy(activePage.content, 'Content copied')}><Copy size={13}/> Copy text</button></div><textarea ref={editor} className="note-editor" value={activePage.content} onChange={e => updatePage('content', e.target.value)} placeholder="Paste or write anything here…" spellCheck={false} aria-label="Note content"/><div className="editor-footer"><span>Plain text · Autosaves as you type</span><span>{sync === 'saved' ? <><Check size={13}/> Saved</> : statusText}</span></div></> : <div className="welcome-empty"><div className="empty-mark">p.</div><h2>Your space, your notes.</h2><p>Create a page to start collecting snippets, links, code, and anything you want to keep.</p><button className="solid-btn" onClick={() => ask('page')}><Plus size={16}/> Create your first page</button></div>}
+          {activePage ? <><div className="editor-heading"><input className="title-input" value={activePage.title} onChange={e => updatePage('title', e.target.value)} placeholder="Untitled page" aria-label="Page title"/><div className="editor-tools"><button className="outline-btn" onClick={() => ask('rename-page')}><Pencil size={14}/> Rename</button><button className="icon-btn danger-icon" onClick={() => ask('delete-page')} title="Delete page"><Trash2 size={16}/></button></div></div><div className="editor-meta"><span>MARKDOWN</span><span>·</span><span>{activePage.content.length.toLocaleString()} characters</span><span className="meta-spacer"/><button className="text-btn" onClick={() => setPreview(value => !value)}>{preview ? 'Edit' : 'Preview'}</button><button className="text-btn" onClick={() => copy(activePage.content, 'Content copied')}><Copy size={13}/> Copy text</button></div>{preview ? <article className="markdown-preview" dangerouslySetInnerHTML={{ __html: markdownHtml }} /> : <textarea ref={editor} className="note-editor" value={activePage.content} onChange={e => updatePage('content', e.target.value)} placeholder="Paste or write Markdown here…" spellCheck={false} aria-label="Note content"/>}<div className="editor-footer"><span>Markdown · Autosaves as you type</span><span>{sync === 'saved' ? <><Check size={13}/> Saved</> : statusText}</span></div></> : <div className="welcome-empty"><div className="empty-mark">p.</div><h2>Your space, your notes.</h2><p>Create a page to start collecting snippets, links, code, and anything you want to keep.</p><button className="solid-btn" onClick={() => ask('page')}><Plus size={16}/> Create your first page</button></div>}
         </section>
       </div>
     </main>

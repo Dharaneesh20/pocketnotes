@@ -1,6 +1,6 @@
 # Pocket Notes — Vercel-only personal notebook
 
-A minimal plain-text notebook with named workspaces, folders, pages, autosave, JSON backup/restore, and cross-device sync. The frontend is a static Vite app; a Vercel Function writes notebook data to **private Vercel Blob storage**. No third-party backend host is used.
+A minimal Markdown notebook with named workspaces, folders, pages, autosave, JSON backup/restore, and cross-device sync. The frontend is a static Vite app; a Vercel Function writes notebook data to MongoDB Atlas.
 
 ## Important privacy model
 
@@ -11,13 +11,13 @@ The browser keeps a local cache for offline viewing/editing. Automatic remote sy
 ## Deploy to Vercel
 
 1. Create a Vercel account and a new Vercel project from this folder or its Git repository.
-2. In the Vercel project, open **Storage** and create a **Blob** store.
-3. Add the Blob store's `BLOB_READ_WRITE_TOKEN` environment variable to the project (Vercel may add it automatically when you connect the store). Apply it to Production and Preview as appropriate.
+2. Create a MongoDB Atlas database and allow the Vercel deployment's network access according to your Atlas security policy.
+3. Add `MONGODB_URI` to the Vercel project's environment variables. Optionally add `MONGODB_DB` (defaults to `pocketnotes`). Never commit the URI or put it in frontend code.
 4. Deploy the project. Vercel automatically builds the Vite frontend and deploys `api/notebook.ts` as a serverless function.
 5. Open the deployed URL. The app creates a workspace key and adds it as `?workspace=...`.
 6. Use **Link → Copy workspace link** and open that exact link on your other devices. This is how devices access the same remote notebook.
 
-The first deployment without a Blob token will show local/offline status and cannot sync until the token is configured.
+The first deployment without `MONGODB_URI` will show local/offline status and cannot sync until the variable is configured. If a MongoDB password has been exposed, rotate it before deploying.
 
 ## Local development
 
@@ -35,7 +35,7 @@ For local API testing, install the Vercel CLI, connect the project to Vercel, pu
 - No accounts, passwords, or sign-in.
 - Users are organizational profiles, not authenticated identities.
 - Folder and page CRUD.
-- Plain-text editing with clipboard copy and download.
+- Markdown editing with a sanitized preview, clipboard copy, and download.
 - Debounced local save and remote sync.
 - Workspace URL sharing for cross-device access.
 - JSON export/import.

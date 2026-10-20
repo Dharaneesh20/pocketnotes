@@ -1,8 +1,28 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { get, list, put } from '@vercel/blob'
+import { MongoClient } from 'mongodb'
 
 const KEY_PATTERN = /^[a-zA-Z0-9_-]{20,80}$/
 const MAX_BYTES = 2_000_000
+type NotebookDocument = { key: string; data: unknown; updatedAt: Date }
+
+const globalForMongo = globalThis as typeof globalThis & {
+  pocketNotesMongo?: Promise<MongoClient>
+}
+
+function getMongoClient() {
+  const uri = process.env.MONGODB_URI
+  if (!uri) throw new Error('MONGODB_URI is not configured')
+  if (!globalForMongo.pocketNotesMongo) {
+    globalForMongo.pocketNotesMongo = new MongoClient(uri, {
+      maxPoolSize: 5,
+      minPoolSize: 0,
+      maxIdleTimeMS: 30_000,
+      connectTimeoutMS: 10_000,
+      serverSelectionTimeoutMS: 5_000
+    }).connect()
+  }
+  return globalForMongo.pocketNotesMongo
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Cache-Control', 'no-store')
@@ -14,24 +34,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const key = typeof req.query.key === 'string' ? req.query.key : ''
   if (!KEY_PATTERN.test(key)) return res.status(400).json({ error: 'Invalid workspace link' })
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return res.status(503).json({ error: 'Storage is not configured. Add BLOB_READ_WRITE_TOKEN in Vercel.' })
+  if (!process.env.MONGODB_URI) {
+    return res.status(503).json({ error: 'Storage is not configured. Add MONGODB_URI in Vercel.' })
   }
 
-  const pathname = `pocket-notes/${key}.json`
-
   try {
+    const client = await getMongoClient()
+    const collection = client
+      .db(process.env.MONGODB_DB || 'pocketnotes')
+      .collection<NotebookDocument>('notebooks')
+
     if (req.method === 'GET') {
-      const result = await list({ prefix: pathname, limit: 10 })
-      const blob = result.blobs.find(item => item.pathname === pathname)
-      if (!blob) return res.status(200).json({ data: null, updatedAt: null })
-      const object = await get(blob.url, { access: 'private', token: process.env.BLOB_READ_WRITE_TOKEN })
-      if (!object || object.statusCode !== 200) throw new Error('Could not read saved notebook')
-      const chunks: Uint8Array[] = []
-      for await (const chunk of object.stream) chunks.push(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk)
-      const bytes = Buffer.concat(chunks)
-      const data = JSON.parse(bytes.toString('utf8'))
-      return res.status(200).json({ data, updatedAt: blob.uploadedAt })
+      const document = await collection.findOne({ key })
+      return res.status(200).json({
+        data: document?.data ?? null,
+        updatedAt: document?.updatedAt ?? null
+      })
     }
 
     const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {})
@@ -44,14 +62,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Invalid notebook format' })
     }
 
-    const saved = await put(pathname, JSON.stringify(parsed), {
-      access: 'private',
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      contentType: 'application/json; charset=utf-8',
-      token: process.env.BLOB_READ_WRITE_TOKEN
-    })
-    return res.status(200).json({ ok: true, updatedAt: saved.uploadedAt })
+    const updatedAt = new Date()
+    await collection.updateOne(
+      { key },
+      { $set: { data: parsed, updatedAt }, $setOnInsert: { key } },
+      { upsert: true }
+    )
+    return res.status(200).json({ ok: true, updatedAt })
   } catch (error) {
     console.error('Pocket Notes storage error:', error)
     return res.status(500).json({ error: 'Storage request failed. Your local copy is still available.' })
