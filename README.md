@@ -37,6 +37,9 @@ For local API testing, install the Vercel CLI, connect the project to Vercel, pu
 - Users are organizational profiles, not authenticated identities.
 - Folder and page CRUD.
 - Markdown editing with a sanitized preview, clipboard copy, and download.
+- Mermaid flowcharts from ` ```mermaid ` fenced Markdown blocks.
+- Minimalist, Claude, ChatGPT, Cyberpunk, and High Contrast themes for the whole UI and Markdown preview.
+- VS Code-style expandable folders with their pages nested in the explorer.
 - Debounced local save and remote sync.
 - Workspace URL sharing for cross-device access.
 - JSON export/import.

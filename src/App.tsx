@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import DOMPurify from 'dompurify'
-import { Archive, Check, ChevronDown, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Download, FilePlus2, Folder, FolderPlus, Github, List, Menu, Moon, MoreHorizontal, Pencil, Plus, Search, Settings2, Sun, Trash2, Upload, Users, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Download, FilePlus2, Folder, FolderPlus, Github, Menu, Moon, MoreHorizontal, Pencil, Plus, Settings2, Sun, Trash2, Upload, Users, X } from 'lucide-react'
 import { marked } from 'marked'
+import mermaid from 'mermaid'
 import type { Notebook, User, Folder as NoteFolder, Page } from './types'
 import { newId, starterNotebook } from './types'
 
@@ -39,6 +40,17 @@ const downloadText = (name: string, text: string, type = 'text/plain') => {
   const url = URL.createObjectURL(new Blob([text], { type }))
   const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
 }
+const NOTE_PACKET_FILE_TYPE = 'application/vnd.notepacket+json'
+const readApiResponse = async (response: Response): Promise<Record<string, unknown>> => {
+  const text = await response.text()
+  if (!text.trim()) return {}
+  try {
+    const body = JSON.parse(text)
+    return body && typeof body === 'object' ? body as Record<string, unknown> : {}
+  } catch {
+    throw new Error(response.ok ? 'The server returned an invalid response.' : `Request failed (${response.status}).`)
+  }
+}
 
 export default function App() {
   const location = useLocation()
@@ -54,12 +66,15 @@ export default function App() {
   const [data, setData] = useState<Notebook>(() => safeParse(localStorage.getItem(cacheKey)) || starterNotebook())
   const [sync, setSync] = useState<'loading'|'saved'|'saving'|'offline'|'error'>('loading')
   const [lastSync, setLastSync] = useState('')
-  const [filter, setFilter] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
-  const [mobilePages, setMobilePages] = useState(false)
   const [showWorkspace, setShowWorkspace] = useState(false)
   const [preview, setPreview] = useState(false)
-  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('note-packet-theme') === 'dark')
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('note-packet-theme')
+    return saved && ['default', 'minimalist', 'claude', 'chatgpt', 'cyberpunk', 'high-contrast'].includes(saved) ? saved : 'default'
+  })
+  const [themeMode, setThemeMode] = useState<'light' | 'dark'>(() => localStorage.getItem('note-packet-theme-mode') === 'dark' ? 'dark' : 'light')
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({})
   const [dialog, setDialog] = useState<{kind: string; value?: string; pin?: string} | null>(null)
   const [toast, setToast] = useState('')
   const editor = useRef<HTMLTextAreaElement>(null)
@@ -68,8 +83,11 @@ export default function App() {
   const serverUpdated = useRef<number>(0)
 
   useEffect(() => {
-    localStorage.setItem('note-packet-theme', darkMode ? 'dark' : 'light')
-  }, [darkMode])
+    localStorage.setItem('note-packet-theme', theme)
+  }, [theme])
+  useEffect(() => {
+    localStorage.setItem('note-packet-theme-mode', themeMode)
+  }, [themeMode])
 
   const activeUser = data.users.find(u => u.id === params.userId)
   const activeFolder = activeUser?.folders.find(f => f.id === params.folderId) || activeUser?.folders[0]
@@ -86,7 +104,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false
     fetch(`/api/notebook?key=${encodeURIComponent(workspace)}`, { cache: 'no-store' })
-      .then(async r => { const body = await r.json(); if (!r.ok) throw new Error(body.error || 'Sync unavailable'); return body })
+      .then(async r => { const body = await readApiResponse(r); if (!r.ok) throw new Error(typeof body.error === 'string' ? body.error : 'Sync unavailable'); return body })
       .then(body => {
         if (cancelled) return
         const remote = body.data as Notebook | null
@@ -127,8 +145,8 @@ export default function App() {
         const response = await fetch(`/api/notebook?key=${encodeURIComponent(workspace)}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next)
         })
-        const body = await response.json()
-        if (!response.ok) throw new Error(body.error || 'Sync failed')
+        const body = await readApiResponse(response)
+        if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'Sync failed')
         setSync('saved'); setLastSync(new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}))
         serverUpdated.current = next.updatedAt
       } catch (error) {
@@ -220,33 +238,57 @@ export default function App() {
   }
   const shareWorkspace = `${location.pathname}?workspace=${workspace}`
   const exportData = () => downloadText(`note-packet-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data, null, 2), 'application/json')
+  const exportNotePacket = () => {
+    const packet = {
+      format: 'Note Packet',
+      formatVersion: 1,
+      exportedAt: new Date().toISOString(),
+      notebook: data
+    }
+    downloadText(`note-packet-${new Date().toISOString().slice(0,10)}.ntpkt`, JSON.stringify(packet, null, 2), NOTE_PACKET_FILE_TYPE)
+  }
   const importData = (file?: File) => {
     if (!file) return
     const reader = new FileReader()
     reader.onload = () => {
-      const imported = safeParse(String(reader.result))
+      let imported = safeParse(String(reader.result))
+      if (!imported) {
+        try {
+          const packet = JSON.parse(String(reader.result))
+          if (packet?.format === 'Note Packet' && packet.formatVersion === 1) imported = safeParse(JSON.stringify(packet.notebook))
+        } catch {}
+      }
       if (!imported) { setToast('That backup file is not valid.'); return }
       if (confirm('Replace the current notebook with this backup?')) setData(imported)
     }
     reader.readAsText(file)
   }
 
-  const allPages = activeUser?.folders.flatMap(f => f.pages.map(p => ({...p, folderName: f.name, folderId: f.id}))) || []
-  const filteredPages = allPages.filter(p => !filter || `${p.title} ${p.content} ${p.folderName}`.toLowerCase().includes(filter.toLowerCase()))
-  const markdownHtml = activePage ? DOMPurify.sanitize(marked.parse(activePage.content, { async: false })) : ''
+  const markdownHtml = activePage ? DOMPurify.sanitize(marked.parse(activePage.content.replace(/```mermaid\s*([\s\S]*?)```/gi, (_match, chart: string) => `<div class="mermaid">${chart.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`), { async: false })) : ''
   const statusIcon = sync === 'saved' ? <Cloud size={14}/> : sync === 'saving' || sync === 'loading' ? <span className="spinner"/> : <CloudOff size={14}/>
   const statusText = ({loading:'Connecting', saved:'Synced', saving:'Saving…', offline:'Offline · local copy', error:'Sync failed · local copy'} as const)[sync]
 
-  const toggleTheme = () => setDarkMode(value => !value)
+  const themeOptions = [{ value: 'default', label: 'Green default' }, { value: 'minimalist', label: 'Minimalist' }, { value: 'claude', label: 'Claude' }, { value: 'chatgpt', label: 'ChatGPT' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'high-contrast', label: 'High contrast' }]
+  const isDarkTheme = themeMode === 'dark'
+  const toggleTheme = () => setThemeMode(mode => mode === 'dark' ? 'light' : 'dark')
+  const markdownPreview = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!preview || !markdownPreview.current) return
+    const flowColors = isDarkTheme
+      ? { primaryColor: theme === 'high-contrast' ? '#111111' : '#242424', primaryTextColor: '#f5f2ec', nodeTextColor: '#f5f2ec', primaryBorderColor: theme === 'high-contrast' ? '#ffffff' : theme === 'cyberpunk' ? '#00ff41' : '#88827b', lineColor: theme === 'high-contrast' ? '#ffffff' : theme === 'cyberpunk' ? '#00ff41' : '#e1794f', secondaryColor: '#242424', tertiaryColor: '#1b1b1b', textColor: '#f5f2ec' }
+      : { primaryColor: theme === 'high-contrast' ? '#fff200' : theme === 'cyberpunk' ? '#ffd7f3' : '#f5d7c2', primaryTextColor: '#262421', nodeTextColor: '#262421', primaryBorderColor: theme === 'cyberpunk' ? '#ed72c5' : '#c87545', lineColor: theme === 'cyberpunk' ? '#8b2f78' : '#c87545', secondaryColor: '#f7f5f2', tertiaryColor: '#ffffff', textColor: '#262421' }
+    mermaid.initialize({ startOnLoad: false, theme: isDarkTheme ? 'dark' : 'base', themeVariables: flowColors, securityLevel: 'strict' })
+    mermaid.run({ nodes: Array.from(markdownPreview.current.querySelectorAll<HTMLElement>('.mermaid')) }).catch(error => setToast(error instanceof Error ? 'Unable to render this flowchart.' : 'Unable to render this flowchart.'))
+  }, [preview, activePage?.content, theme, isDarkTheme])
 
-  if (!activeUser) return <div className={`profile-picker ${darkMode ? 'dark-mode' : ''}`}>
-    <div className="profile-picker-top"><div className="brand-mark">n.</div><div className="landing-bubbles" aria-hidden="true"><span>⌁</span><span>✦</span><span>☄</span></div><button className="theme-picker-btn" onClick={toggleTheme} aria-label="Toggle dark mode">{darkMode ? <Sun size={18}/> : <Moon size={18}/>}</button></div>
-    <div className="profile-picker-content"><span className="eyebrow">THE INTERNET'S TINIEST NOTE UNIVERSE</span><h1>Who is using <em>Note Packet</em>?</h1><p className="landing-intro">A shared digital fridge for thoughts. Pick your profile, open a folder, and rescue your brilliant ideas from the dangerous swamp called “I’ll remember it later.”</p><div className="landing-punchline"><span>🧠</span> Notes go in. Chaos gets organized. <span>✨</span></div><h2>Choose your human</h2><div className="profile-grid">{data.users.map(user => <button key={user.id} className="profile-card" onClick={() => navigate(routeFor(user))}><span className="profile-avatar">{user.name.slice(0, 1).toUpperCase()}</span><strong>{user.name}</strong><small>{user.folders.length} {user.folders.length === 1 ? 'folder' : 'folders'} · {user.folders.reduce((count, folder) => count + folder.pages.length, 0)} notes</small></button>)}<button className="profile-card profile-add" onClick={() => ask('user')}><Plus size={25}/><strong>Join the packet</strong><small>Make a shared profile</small></button></div><div className="landing-how"><div><b>1</b><span>Pick a profile</span></div><div><b>2</b><span>Find a folder</span></div><div><b>3</b><span>Ship the idea</span></div></div></div>
+  if (!activeUser) return <div className={`profile-picker theme-${theme} ${isDarkTheme ? 'dark-mode' : ''}`}>
+    <div className="profile-picker-top"><div className="brand-mark">n.</div><div className="landing-bubbles" aria-hidden="true"><span>⌁</span><span>✦</span><span>☄</span></div><button className="theme-picker-btn" onClick={toggleTheme} aria-label="Toggle theme">{isDarkTheme ? <Sun size={18}/> : <Moon size={18}/>}</button></div>
+    <div className="profile-picker-content"><span className="eyebrow">THE INTERNET'S TINIEST NOTE UNIVERSE</span><h1>Who is using <em>Note Packet</em>?</h1><p className="landing-intro">A shared digital fridge for thoughts. Pick a profile, open a folder, and rescue your brilliant ideas from the dangerous swamp called “I’ll remember it later.”</p><div className="landing-punchline"><span>🧠</span> Notes go in. Chaos gets organized. <span>✨</span></div><div className="landing-features"><span>✦ Markdown + Mermaid</span><span>◐ PDF download</span><span>↗ Shareable workspace links</span><span>◒ Five visual themes</span></div><h2>Choose your human</h2><div className="profile-grid">{data.users.map(user => <button key={user.id} className="profile-card" onClick={() => navigate(routeFor(user))}><span className="profile-avatar">{user.name.slice(0, 1).toUpperCase()}</span><strong>{user.name}</strong><small>{user.folders.length} {user.folders.length === 1 ? 'folder' : 'folders'} · {user.folders.reduce((count, folder) => count + folder.pages.length, 0)} notes</small></button>)}<button className="profile-card profile-add" onClick={() => ask('user')}><Plus size={25}/><strong>Join the packet</strong><small>Make a shared profile</small></button></div><div className="landing-how"><div><b>1</b><span>Pick a profile</span></div><div><b>2</b><span>Find a folder</span></div><div><b>3</b><span>Ship the idea</span></div></div></div>
     <footer className="profile-picker-footer">Developed by <a href="https://github.com/Dharaneesh20" target="_blank" rel="noreferrer"><Github size={13}/> Dharaneesh20</a></footer>
     {dialog && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDialog(null) }}><div className="modal"><div className="modal-head"><h3>New user</h3><button className="icon-btn" onClick={() => setDialog(null)}><X size={17}/></button></div><form onSubmit={e => { e.preventDefault(); submitDialog() }}><input autoFocus className="modal-input" value={dialog.value || ''} onChange={e => setDialog(d => d ? {...d,value:e.target.value} : d)} placeholder="e.g. Personal" maxLength={80}/><input className="modal-input pin-input" type="password" inputMode="numeric" pattern="\d{4}|\d{6}" maxLength={6} value={dialog.pin || ''} onChange={e => setDialog(d => d ? {...d,pin:e.target.value.replace(/\D/g, '')} : d)} placeholder="4 or 6 digit safety PIN" aria-label="Safety PIN"/><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setDialog(null)}>Cancel</button><button type="submit" className="solid-btn"><Check size={15}/> Save</button></div></form></div></div>}
   </div>
 
-  return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
+  return <div className={`app-shell theme-${theme} ${isDarkTheme ? 'dark-mode' : ''}`}>
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
       <div className="brand"><div className="brand-mark">n.</div><div><strong>Note Packet</strong><small>PERSONAL WORKSPACE</small></div><button className="icon-btn mobile-close" onClick={() => setMobileNav(false)} aria-label="Close menu"><X size={18}/></button></div>
       <div className="workspace-label"><span>WORKSPACE</span><button className="text-btn" onClick={() => setShowWorkspace(v => !v)}><Settings2 size={14}/> Link</button></div>
@@ -254,31 +296,23 @@ export default function App() {
       <div className="section-head"><span>USERS</span><button className="icon-btn" onClick={() => ask('user')} title="New user"><Plus size={16}/></button></div>
       <div className="user-list">{data.users.map(u => <div key={u.id} className={`user-row ${activeUser?.id === u.id ? 'selected' : ''}`}><Link to={routeFor(u)} onClick={() => setMobileNav(false)} className="user-item"><Users size={15}/><span>{u.name}</span>{activeUser?.id === u.id && <ChevronDown size={14}/>}</Link><button className="mini-btn" title="Profile options" onClick={() => ask('user-menu', u.id)}><MoreHorizontal size={16}/></button></div>)}</div>
       <div className="section-head folders-head"><span>FOLDERS</span><button className="icon-btn" onClick={() => ask('folder')} title="New folder" disabled={!activeUser}><FolderPlus size={16}/></button></div>
-      <div className="folder-list">{activeUser?.folders.map(f => <div key={f.id} className={`folder-item ${activeFolder?.id === f.id ? 'selected' : ''}`}><Link to={route(activeUser, f)} onClick={() => setMobileNav(false)}><Folder size={15}/><span>{f.name}</span><small>{f.pages.length}</small></Link><button className="mini-btn" title="Folder options" onClick={() => ask('folder-menu', f.id)}><MoreHorizontal size={16}/></button></div>)}</div>
+      <div className="folder-list explorer-list">{activeUser?.folders.map(f => <div key={f.id} className={`explorer-folder ${activeFolder?.id === f.id ? 'selected' : ''}`}><div className="explorer-folder-row"><button className="explorer-toggle" onClick={() => setExpandedFolders(old => ({ ...old, [f.id]: !old[f.id] }))} aria-label={`${expandedFolders[f.id] ? 'Collapse' : 'Expand'} ${f.name}`}>{expandedFolders[f.id] ? '▾' : '▸'}</button><Link to={route(activeUser, f)} onClick={() => setMobileNav(false)}><Folder size={15}/><span>{f.name}</span><small>{f.pages.length}</small></Link><button className="mini-btn" title="Folder options" onClick={() => ask('folder-menu', f.id)}><MoreHorizontal size={16}/></button></div>{expandedFolders[f.id] && <div className="explorer-pages">{f.pages.map(p => <Link key={p.id} to={route(activeUser, f, p)} onClick={() => setMobileNav(false)} className={activePage?.id === p.id ? 'active' : ''}><FilePlus2 size={13}/><span>{p.title || 'Untitled'}</span></Link>)}</div>}</div>)}</div>
       <button className="new-page-btn" onClick={() => ask('page')} disabled={!activeUser}><FilePlus2 size={16}/> New page <span>↵</span></button>
-      <div className="sidebar-bottom"><div className="sync-status">{statusIcon}<span>{statusText}</span></div><div className="side-actions"><button onClick={exportData}><Download size={14}/> Export</button><label><Upload size={14}/> Import<input type="file" accept="application/json,.json" hidden onChange={e => importData(e.target.files?.[0])}/></label><button onClick={toggleTheme} title="Toggle dark mode">{darkMode ? <Sun size={14}/> : <Moon size={14}/>} {darkMode ? 'Light' : 'Dark'}</button></div><div className="credit">Developed by <a href="https://github.com/Dharaneesh20" target="_blank" rel="noreferrer"><Github size={12}/> Dharaneesh20</a></div></div>
+      <div className="sidebar-bottom"><div className="sync-status">{statusIcon}<span>{statusText}</span></div><div className="side-actions"><button onClick={exportNotePacket} title="Export Note Packet file"><Download size={14}/> .ntpkt</button><button onClick={exportData} title="Export JSON backup"><Download size={14}/> JSON</button><label><Upload size={14}/> Import<input type="file" accept=".ntpkt,application/vnd.notepacket+json,.json,application/json" hidden onChange={e => importData(e.target.files?.[0])}/></label><button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${isDarkTheme ? 'light' : 'dark'} mode`}>{isDarkTheme ? <Sun size={14}/> : <Moon size={14}/>} {isDarkTheme ? 'Light' : 'Dark'}</button><select className="theme-select"  value={theme} onChange={e => setTheme(e.target.value)} aria-label="Choose theme">{themeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div><div className="credit">Developed by <a href="https://github.com/Dharaneesh20" target="_blank" rel="noreferrer"><Github size={12}/> Dharaneesh20</a></div></div>
     </aside>
     {mobileNav && <button className="scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation"/>}
     <main className="main">
       <header className="topbar"><button className="icon-btn menu-btn" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={19}/></button><div className="breadcrumbs"><span>{activeUser?.name || 'Workspace'}</span>{activeFolder && <><ChevronRight size={14}/><span>{activeFolder.name}</span></>}{activePage && <><ChevronRight size={14}/><strong>{activePage.title || 'Untitled'}</strong></>}</div><div className="top-actions"><span className={`save-pill ${sync}`} title={lastSync}>{statusIcon}<span>{statusText}</span></span><button className="icon-btn" onClick={() => copy(activePage?.content || '', 'Page copied')} title="Copy page text"><Clipboard size={17}/></button><button className="icon-btn" onClick={() => activePage && downloadText(`${activePage.title || 'note'}.txt`, activePage.content)} title="Download page"><Download size={17}/></button><button className="outline-btn print-btn" onClick={() => window.print()} disabled={!activePage} title="Print this page or save it as a PDF"><Download size={14}/> PDF</button></div></header>
       <div className="content">
-        <div className={`page-list-panel ${mobilePages ? 'mobile-pages-open' : ''}`}>
-          <div className="list-title"><div><span className="eyebrow">PAGES</span><h2>{activeFolder?.name || 'All notes'}</h2></div><button className="solid-btn compact" onClick={() => ask('page')} title="Create page"><Plus size={16}/></button></div>
-          <div className="search-box"><Search size={15}/><input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Find a page…"/>{filter && <button onClick={() => setFilter('')}><X size={14}/></button>}</div>
-          <div className="page-list">{(filter ? filteredPages : (activeFolder?.pages || []).map(p => ({...p, folderName: activeFolder?.name || '', folderId: activeFolder?.id || ''}))).map(p => <Link key={`${p.folderId}-${p.id}`} to={route(activeUser, activeUser?.folders.find(f => f.id === p.folderId), p)} onClick={() => setMobilePages(false)} className={`page-card ${activePage?.id === p.id ? 'active' : ''}`}><div className="page-card-icon"><Archive size={15}/></div><div className="page-card-copy"><strong>{p.title || 'Untitled'}</strong><span>{p.content.trim().replace(/\s+/g, ' ').slice(0, 58) || 'Empty page'}</span>{filter && <small>{p.folderName}</small>}</div></Link>)}
-            {!(filter ? filteredPages : activeFolder?.pages || []).length && <div className="empty-list"><FilePlus2 size={22}/><p>{filter ? 'No matching pages' : 'Nothing here yet'}</p><button className="text-btn" onClick={() => ask('page')}>Create a page</button></div>}
-          </div>
-          <div className="list-footer">{allPages.length} {allPages.length === 1 ? 'page' : 'pages'} total</div>
-        </div>
         <section className="editor-panel">
-          {activePage ? <><div className="editor-heading"><input className="title-input" value={activePage.title} onChange={e => updatePage('title', e.target.value)} placeholder="Untitled page" aria-label="Page title"/><div className="editor-tools"><button className="outline-btn" onClick={() => ask('rename-page')}><Pencil size={14}/> Rename</button><button className="icon-btn danger-icon" onClick={() => ask('delete-page')} title="Delete page"><Trash2 size={16}/></button></div></div><div className="editor-meta"><span>MARKDOWN</span><span>·</span><span>{activePage.content.length.toLocaleString()} characters</span><span className="meta-spacer"/><button className="text-btn" onClick={() => setPreview(value => !value)}>{preview ? 'Edit' : 'Preview'}</button><button className="text-btn" onClick={() => copy(activePage.content, 'Content copied')}><Copy size={13}/> Copy text</button></div>{preview ? <article className="markdown-preview" dangerouslySetInnerHTML={{ __html: markdownHtml }} /> : <textarea ref={editor} className="note-editor" value={activePage.content} onChange={e => updatePage('content', e.target.value)} placeholder="Paste or write Markdown here…" spellCheck={false} aria-label="Note content"/>}<div className="editor-footer"><span>Markdown · Autosaves as you type</span><span>{sync === 'saved' ? <><Check size={13}/> Saved</> : statusText}</span></div></> : <div className="welcome-empty"><div className="empty-mark">p.</div><h2>Your space, your notes.</h2><p>Create a page to start collecting snippets, links, code, and anything you want to keep.</p><button className="solid-btn" onClick={() => ask('page')}><Plus size={16}/> Create your first page</button></div>}
+          {activePage ? <><div className="editor-heading"><input className="title-input" value={activePage.title} onChange={e => updatePage('title', e.target.value)} placeholder="Untitled page" aria-label="Page title"/><div className="editor-tools"><button className="outline-btn" onClick={() => ask('rename-page')}><Pencil size={14}/> Rename</button><button className="icon-btn danger-icon" onClick={() => ask('delete-page')} title="Delete page"><Trash2 size={16}/></button></div></div><div className="editor-meta"><span>MARKDOWN · MERMAID FLOWCHARTS</span><span>·</span><span>{activePage.content.length.toLocaleString()} characters</span><span className="meta-spacer"/><button className="text-btn" onClick={() => setPreview(value => !value)}>{preview ? 'Edit' : 'Preview'}</button><button className="text-btn" onClick={() => copy(activePage.content, 'Content copied')}><Copy size={13}/> Copy text</button></div>{preview ? <article ref={markdownPreview} className="markdown-preview" dangerouslySetInnerHTML={{ __html: markdownHtml }} /> : <textarea ref={editor} className="note-editor" value={activePage.content} onChange={e => updatePage('content', e.target.value)} placeholder="Paste Markdown or a ```mermaid flowchart here…" spellCheck={false} aria-label="Note content"/>}<div className="editor-footer"><span>Markdown · Autosaves as you type</span><span>{sync === 'saved' ? <><Check size={13}/> Saved</> : statusText}</span></div></> : <div className="welcome-empty"><div className="empty-mark">p.</div><h2>Your space, your notes.</h2><p>Create a page to start collecting snippets, links, code, and anything you want to keep.</p><button className="solid-btn" onClick={() => ask('page')}><Plus size={16}/> Create your first page</button></div>}
         </section>
       </div>
       <div className="print-header"><span className="print-logo">n.</span><strong>Note Packet</strong><span>https://notepacket.vercel.app</span></div>
       {activePage && <article className="print-note"><h1>{activePage.title || 'Untitled'}</h1><div dangerouslySetInnerHTML={{ __html: markdownHtml }} /></article>}
       <footer className="print-footer"><span className="print-logo">n.</span><span>Note Packet · <a href="https://notepacket.vercel.app">notepacket.vercel.app</a> · Developed by <a href="https://github.com/Dharaneesh20">Dharaneesh20</a></span></footer>
     </main>
-    <nav className="mobile-dock" aria-label="Mobile actions"><button onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={19}/><span>Menu</span></button><button onClick={() => setMobilePages(value => !value)} aria-label="Show pages"><List size={19}/><span>Pages</span></button><button onClick={() => ask('page')} disabled={!activeUser} aria-label="New page"><Plus size={20}/><span>New</span></button><button onClick={toggleTheme} aria-label="Toggle dark mode">{darkMode ? <Sun size={19}/> : <Moon size={19}/>}<span>{darkMode ? 'Light' : 'Dark'}</span></button>{activePage && <button onClick={() => window.print()} aria-label="Download PDF"><Download size={19}/><span>PDF</span></button>}</nav>
+    <nav className="mobile-dock" aria-label="Mobile actions"><button onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu size={19}/><span>Explorer</span></button><button onClick={() => ask('page')} disabled={!activeUser} aria-label="New page"><Plus size={20}/><span>New</span></button><button onClick={toggleTheme} aria-label="Toggle theme">{isDarkTheme ? <Sun size={19}/> : <Moon size={19}/>}<span>Theme</span></button>{activePage && <button onClick={() => window.print()} aria-label="Download PDF"><Download size={19}/><span>PDF</span></button>}</nav>
     {dialog && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDialog(null) }}><div className="modal"><div className="modal-head"><h3>{({user:'New user',folder:'New folder',page:'New page','rename-user':'Rename user','rename-folder':'Rename folder','rename-page':'Rename page','delete-page':'Delete this page?','delete-folder':'Delete this folder?','delete-user':'Delete this user?','folder-menu':'Folder options','user-menu':'Profile options','set-pin':'Set safety PIN'} as Record<string,string>)[dialog.kind] || 'Confirm'}</h3><button className="icon-btn" onClick={() => setDialog(null)}><X size={17}/></button></div>
       {dialog.kind === 'folder-menu' ? <div className="modal-actions vertical"><button onClick={() => { const f = activeUser?.folders.find(f => f.id === dialog.value); setDialog({kind:'rename-folder',value:f?.name || ''}) }}><Pencil size={15}/> Rename folder</button><button className="danger-text" onClick={() => setDialog({kind:'delete-folder'})}><Trash2 size={15}/> Delete folder</button></div> :
       dialog.kind === 'user-menu' ? <div className="modal-actions vertical"><button onClick={() => { const u = data.users.find(u => u.id === dialog.value); setDialog({kind:'rename-user',value:u?.name || ''}) }}><Pencil size={15}/> Rename profile</button><button onClick={() => setDialog({kind:'set-pin',value:dialog.value})}>Set or change safety PIN</button><button className="danger-text" onClick={() => setDialog({kind:'delete-user',value:dialog.value})}><Trash2 size={15}/> Delete profile</button></div> :
