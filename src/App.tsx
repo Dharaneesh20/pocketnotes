@@ -8,10 +8,7 @@ import { newId, starterNotebook } from './types'
 
 const LOCAL_KEY = 'pocket-notes-cache-v1'
 const WORKSPACE_KEY = 'pocket-notes-workspace-v1'
-const randomWorkspace = () => {
-  const bytes = crypto.getRandomValues(new Uint8Array(24))
-  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
-}
+const PUBLIC_WORKSPACE = 'notepacket-public-workspace-v1'
 const validPin = (pin: string) => /^\d{4}(\d{2})?$/.test(pin)
 const hashPin = async (pin: string) => {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin))
@@ -19,10 +16,11 @@ const hashPin = async (pin: string) => {
 }
 function getWorkspace() {
   const params = new URLSearchParams(window.location.search)
-  let key = params.get('workspace') || localStorage.getItem(WORKSPACE_KEY)
-  if (!key || !/^[a-zA-Z0-9_-]{20,80}$/.test(key)) key = randomWorkspace()
+  const requestedWorkspace = params.get('workspace')
+  let key = requestedWorkspace || PUBLIC_WORKSPACE
+  if (requestedWorkspace && !/^[a-zA-Z0-9_-]{20,80}$/.test(requestedWorkspace)) key = PUBLIC_WORKSPACE
   localStorage.setItem(WORKSPACE_KEY, key)
-  if (params.get('workspace') !== key) {
+  if (requestedWorkspace && requestedWorkspace !== key) {
     params.set('workspace', key)
     history.replaceState({}, '', `${location.pathname}?${params.toString()}${location.hash}`)
   }
@@ -52,7 +50,8 @@ export default function App() {
     pageId: routeParts[4] === 'p' ? routeParts[5] : undefined
   }
   const workspace = useMemo(() => getWorkspace(), [])
-  const [data, setData] = useState<Notebook>(() => safeParse(localStorage.getItem(LOCAL_KEY)) || starterNotebook())
+  const cacheKey = `${LOCAL_KEY}-${workspace}`
+  const [data, setData] = useState<Notebook>(() => safeParse(localStorage.getItem(cacheKey)) || starterNotebook())
   const [sync, setSync] = useState<'loading'|'saved'|'saving'|'offline'|'error'>('loading')
   const [lastSync, setLastSync] = useState('')
   const [filter, setFilter] = useState('')
@@ -78,7 +77,7 @@ export default function App() {
   const route = (u = activeUser, f?: NoteFolder, p?: Page) => u ? routeFor(u, f, p) : '/'
 
   const persistLocal = useCallback((next: Notebook) => {
-    try { localStorage.setItem(LOCAL_KEY, JSON.stringify(next)) } catch {
+    try { localStorage.setItem(cacheKey, JSON.stringify(next)) } catch {
       setToast('Browser storage is full. Export a backup before continuing.')
     }
   }, [])
@@ -92,14 +91,14 @@ export default function App() {
         if (cancelled) return
         const remote = body.data as Notebook | null
         if (remote && Array.isArray(remote.users)) {
-          const local = safeParse(localStorage.getItem(LOCAL_KEY))
+          const local = safeParse(localStorage.getItem(cacheKey))
           const localTime = local?.updatedAt || 0
           const remoteTime = remote.updatedAt || 0
           // The server is authoritative once it has data; local-only edits are pushed if newer.
           if (local && localTime > remoteTime) setData(local)
           else { setData(remote); persistLocal(remote); serverUpdated.current = remoteTime }
         } else {
-          const local = safeParse(localStorage.getItem(LOCAL_KEY))
+          const local = safeParse(localStorage.getItem(cacheKey))
           if (local) setData(local)
         }
         setSync(navigator.onLine ? 'saved' : 'offline')
@@ -241,8 +240,8 @@ export default function App() {
   const toggleTheme = () => setDarkMode(value => !value)
 
   if (!activeUser) return <div className={`profile-picker ${darkMode ? 'dark-mode' : ''}`}>
-    <div className="profile-picker-top"><div className="brand-mark">n.</div><button className="theme-picker-btn" onClick={toggleTheme} aria-label="Toggle dark mode">{darkMode ? <Sun size={18}/> : <Moon size={18}/>}</button></div>
-    <div className="profile-picker-content"><span className="eyebrow">NOTE PACKET</span><h1>Who's using Note Packet?</h1><p>Select a profile to open its folders and notes.</p><div className="profile-grid">{data.users.map(user => <button key={user.id} className="profile-card" onClick={() => navigate(routeFor(user))}><span className="profile-avatar">{user.name.slice(0, 1).toUpperCase()}</span><strong>{user.name}</strong><small>{user.folders.length} {user.folders.length === 1 ? 'folder' : 'folders'}</small></button>)}<button className="profile-card profile-add" onClick={() => ask('user')}><Plus size={25}/><strong>Add profile</strong><small>Create a shared profile</small></button></div></div>
+    <div className="profile-picker-top"><div className="brand-mark">n.</div><div className="landing-bubbles" aria-hidden="true"><span>⌁</span><span>✦</span><span>☄</span></div><button className="theme-picker-btn" onClick={toggleTheme} aria-label="Toggle dark mode">{darkMode ? <Sun size={18}/> : <Moon size={18}/>}</button></div>
+    <div className="profile-picker-content"><span className="eyebrow">THE INTERNET'S TINIEST NOTE UNIVERSE</span><h1>Who is using <em>Note Packet</em>?</h1><p className="landing-intro">A shared digital fridge for thoughts. Pick your profile, open a folder, and rescue your brilliant ideas from the dangerous swamp called “I’ll remember it later.”</p><div className="landing-punchline"><span>🧠</span> Notes go in. Chaos gets organized. <span>✨</span></div><h2>Choose your human</h2><div className="profile-grid">{data.users.map(user => <button key={user.id} className="profile-card" onClick={() => navigate(routeFor(user))}><span className="profile-avatar">{user.name.slice(0, 1).toUpperCase()}</span><strong>{user.name}</strong><small>{user.folders.length} {user.folders.length === 1 ? 'folder' : 'folders'} · {user.folders.reduce((count, folder) => count + folder.pages.length, 0)} notes</small></button>)}<button className="profile-card profile-add" onClick={() => ask('user')}><Plus size={25}/><strong>Join the packet</strong><small>Make a shared profile</small></button></div><div className="landing-how"><div><b>1</b><span>Pick a profile</span></div><div><b>2</b><span>Find a folder</span></div><div><b>3</b><span>Ship the idea</span></div></div></div>
     <footer className="profile-picker-footer">Developed by <a href="https://github.com/Dharaneesh20" target="_blank" rel="noreferrer"><Github size={13}/> Dharaneesh20</a></footer>
     {dialog && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDialog(null) }}><div className="modal"><div className="modal-head"><h3>New user</h3><button className="icon-btn" onClick={() => setDialog(null)}><X size={17}/></button></div><form onSubmit={e => { e.preventDefault(); submitDialog() }}><input autoFocus className="modal-input" value={dialog.value || ''} onChange={e => setDialog(d => d ? {...d,value:e.target.value} : d)} placeholder="e.g. Personal" maxLength={80}/><input className="modal-input pin-input" type="password" inputMode="numeric" pattern="\d{4}|\d{6}" maxLength={6} value={dialog.pin || ''} onChange={e => setDialog(d => d ? {...d,pin:e.target.value.replace(/\D/g, '')} : d)} placeholder="4 or 6 digit safety PIN" aria-label="Safety PIN"/><div className="modal-actions"><button type="button" className="outline-btn" onClick={() => setDialog(null)}>Cancel</button><button type="submit" className="solid-btn"><Check size={15}/> Save</button></div></form></div></div>}
   </div>

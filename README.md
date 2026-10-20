@@ -6,7 +6,7 @@ A minimal Markdown notebook with named workspaces, folders, pages, autosave, JSO
 
 There is no login or password by design. The `workspace` query parameter is a randomly generated 192-bit bearer secret. Anyone who obtains the full workspace URL can read and edit that notebook. Do not put sensitive credentials, API keys, financial details, or private documents in it. Keep the URL private. The notebook is not encrypted end-to-end: Vercel's server function processes the content.
 
-The browser keeps a local cache for offline viewing/editing. Automatic remote sync requires a network connection. If two devices edit simultaneously, this starter uses last-write-wins and does not merge conflicting changes. Export backups regularly.
+The default `notepacket.vercel.app` URL uses one shared public workspace, so profiles created there are visible to everyone using that domain. The browser keeps a local cache for offline viewing/editing. Automatic remote sync requires a network connection. If two devices edit simultaneously, this starter uses last-write-wins and does not merge conflicting changes. Export backups regularly.
 
 ## Deploy to Vercel
 
@@ -14,8 +14,8 @@ The browser keeps a local cache for offline viewing/editing. Automatic remote sy
 2. Create a MongoDB Atlas database and allow the Vercel deployment's network access according to your Atlas security policy.
 3. Add `MONGODB_URI` to the Vercel project's environment variables. Optionally add `MONGODB_DB` (defaults to `pocketnotes`). Never commit the URI or put it in frontend code.
 4. Deploy the project. Vercel automatically builds the Vite frontend and deploys `api/notebook.ts` as a serverless function.
-5. Open the deployed URL. The app creates a workspace key and adds it as `?workspace=...`.
-6. Use **Link → Copy workspace link** and open that exact link on your other devices. This is how devices access the same remote notebook.
+5. Open the deployed URL. Everyone using the normal domain sees the same shared profile picker and public workspace.
+6. Use **Link → Copy workspace link** only when you want a separate private workspace. The `workspace` query parameter selects that isolated notebook.
 
 The first deployment without `MONGODB_URI` will show local/offline status and cannot sync until the variable is configured. If a MongoDB password has been exposed, rotate it before deploying.
 
@@ -32,7 +32,7 @@ For local API testing, install the Vercel CLI, connect the project to Vercel, pu
 
 ## Features
 
-- No accounts, passwords, or sign-in.
+- No accounts or sign-in; the normal domain intentionally shares its profile list with everyone.
 - User profiles can be protected with a 4- or 6-digit safety PIN; deleting a profile requires its PIN.
 - Users are organizational profiles, not authenticated identities.
 - Folder and page CRUD.
