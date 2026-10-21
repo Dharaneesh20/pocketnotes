@@ -23,6 +23,46 @@ const HIGHLIGHT_COLORS: { id: HighlightColor; label: string; hex: string }[] = [
   { id: 'orange', label: 'Sunset Amber', hex: '#F97316' }
 ]
 
+function findTextOffsetsInContent(content: string, searchText: string): { start: number; end: number } | null {
+  if (!searchText || !content) return null
+  const trimmed = searchText.trim()
+  if (!trimmed) return null
+
+  // 1. Exact match
+  const exactIdx = content.indexOf(trimmed)
+  if (exactIdx !== -1) {
+    return { start: exactIdx, end: exactIdx + trimmed.length }
+  }
+
+  // 2. Whitespace-flexible regex match (handles newlines converted to spaces by browser)
+  try {
+    const words = trimmed.split(/\s+/).filter(Boolean).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    if (words.length > 0) {
+      const pattern = words.join('(?:<[^>]+>|[*_`~#>]|\\s)+')
+      const regex = new RegExp(pattern, 'm')
+      const match = regex.exec(content)
+      if (match) {
+        return { start: match.index, end: match.index + match[0].length }
+      }
+    }
+  } catch {}
+
+  // 3. Fallback: match by prefix (first 18 chars) and suffix (last 18 chars)
+  if (trimmed.length > 36) {
+    const prefix = trimmed.slice(0, 18).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const suffix = trimmed.slice(-18).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    try {
+      const regex = new RegExp(`${prefix}[\\s\\S]*?${suffix}`, 'm')
+      const match = regex.exec(content)
+      if (match) {
+        return { start: match.index, end: match.index + match[0].length }
+      }
+    } catch {}
+  }
+
+  return null
+}
+
 interface WorkspaceProps {
   data: Notebook
   activeUser: User
@@ -76,10 +116,14 @@ export function Workspace({
   const [targetMode, setTargetMode] = React.useState<'highlight' | 'bookmark' | null>(null)
   const [ballExpanded, setBallExpanded] = React.useState<boolean>(false)
   const [ballPos, setBallPos] = React.useState<{ x: number; y: number }>(() => ({
-    x: typeof window !== 'undefined' ? Math.max(20, window.innerWidth - 80) : 800,
-    y: 160
+    x: typeof window !== 'undefined' ? (window.innerWidth <= 768 ? Math.max(16, window.innerWidth - 64) : Math.max(20, window.innerWidth - 80)) : 800,
+    y: typeof window !== 'undefined' && window.innerWidth <= 768 ? 240 : 160
   }))
   const [isDragging, setIsDragging] = React.useState(false)
+  const [showMobileMore, setShowMobileMore] = React.useState(false)
+  const mobileMoreRef = useRef<HTMLDivElement>(null)
+  const savedSelectionRef = useRef<{ text: string } | null>(null)
+  const lastTargetHandledRef = useRef<number>(0)
   const dragStartRef = useRef<{ mouseX: number; mouseY: number; ballX: number; ballY: number } | null>(null)
   const hasMovedRef = useRef<boolean>(false)
   const bmMenuRef = useRef<HTMLDivElement>(null)
@@ -87,6 +131,58 @@ export function Workspace({
   const markdownPreview = useRef<HTMLElement>(null)
   const importRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
+
+  // Track selection changes across touch & preview so highlighting never loses target
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const sel = window.getSelection()
+      if (sel && sel.toString().trim()) {
+        savedSelectionRef.current = { text: sel.toString().trim() }
+      }
+    }
+    document.addEventListener('selectionchange', handleSelectionChange)
+    return () => document.removeEventListener('selectionchange', handleSelectionChange)
+  }, [])
+
+  // Close mobile more dropdown on outside tap
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent | TouchEvent) => {
+      const target = e.target as Node
+      if (mobileMoreRef.current && !mobileMoreRef.current.contains(target)) {
+        setShowMobileMore(false)
+      }
+    }
+    if (showMobileMore) {
+      document.addEventListener('mousedown', handleDocumentClick)
+      document.addEventListener('touchstart', handleDocumentClick)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentClick)
+      document.removeEventListener('touchstart', handleDocumentClick)
+    }
+  }, [showMobileMore])
+
+  // Handle window resize smoothly: auto-close mobile drawer when scaling to desktop and prevent transition thrashing
+  useEffect(() => {
+    let resizeTimer: ReturnType<typeof setTimeout>
+    const handleResize = () => {
+      document.body.classList.add('is-resizing')
+      if (window.innerWidth > 768) {
+        setMobileNav(false)
+        setShowMobileMore(false)
+      }
+      clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(() => {
+        document.body.classList.remove('is-resizing')
+      }, 150)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      clearTimeout(resizeTimer)
+      document.body.classList.remove('is-resizing')
+    }
+  }, [])
 
   const statusIcon = sync === 'saved' ? <Cloud size={13} /> : sync === 'saving' || sync === 'loading' ? <span className="ws-spinner" /> : <CloudOff size={13} />
   const statusText: Record<typeof sync, string> = { loading: 'Connecting', saved: 'Synced', saving: 'Saving…', offline: 'Offline', error: 'Sync failed' }
@@ -388,16 +484,22 @@ export function Workspace({
       setTargetMode(null)
       return
     }
-    const sel = window.getSelection()?.toString().trim()
-    if (preview && sel && activePage.content.includes(sel)) {
-      const idx = activePage.content.indexOf(sel)
-      applyHighlightRange(color, idx, idx + sel.length)
-      setTargetMode(null)
-      return
+
+    const liveSel = window.getSelection()?.toString().trim()
+    const selText = liveSel || savedSelectionRef.current?.text || ''
+    if (preview && selText) {
+      const range = findTextOffsetsInContent(activePage.content, selText)
+      if (range) {
+        applyHighlightRange(color, range.start, range.end)
+        savedSelectionRef.current = null
+        setTargetMode(null)
+        return
+      }
     }
+
     setTargetMode(curr => {
       const next = curr === 'highlight' ? null : 'highlight'
-      if (next) onShowToast?.('🖍️ Highlight mode: click any line or drag to highlight (or Esc to cancel)')
+      if (next) onShowToast?.('🖍️ Highlight mode: tap any line or drag to highlight (or Esc to cancel)')
       return next
     })
   }
@@ -407,6 +509,17 @@ export function Workspace({
     const el = editor.current
     if (!preview && el && el.selectionStart !== el.selectionEnd) {
       applyHighlightRange(color, el.selectionStart, el.selectionEnd)
+      return
+    }
+    const liveSel = window.getSelection()?.toString().trim()
+    const selText = liveSel || savedSelectionRef.current?.text || ''
+    if (preview && selText && activePage) {
+      const range = findTextOffsetsInContent(activePage.content, selText)
+      if (range) {
+        applyHighlightRange(color, range.start, range.end)
+        savedSelectionRef.current = null
+        setTargetMode(null)
+      }
     }
   }
 
@@ -418,9 +531,20 @@ export function Workspace({
       setTargetMode(null)
       return
     }
+    const liveSel = window.getSelection()?.toString().trim()
+    const selText = liveSel || savedSelectionRef.current?.text || ''
+    if (preview && selText) {
+      const range = findTextOffsetsInContent(activePage.content, selText)
+      if (range) {
+        applyBookmarkAtPos(color, range.start)
+        savedSelectionRef.current = null
+        setTargetMode(null)
+        return
+      }
+    }
     setTargetMode(curr => {
       const next = curr === 'bookmark' ? null : 'bookmark'
-      if (next) onShowToast?.('🔖 Bookmark mode: click the exact line to bookmark (or Esc to cancel)')
+      if (next) onShowToast?.('🔖 Bookmark mode: tap the exact line to bookmark (or Esc to cancel)')
       return next
     })
   }
@@ -444,18 +568,80 @@ export function Workspace({
     }, 15)
   }
 
-  const handlePreviewClick = (e: React.MouseEvent<HTMLElement>) => {
+  const handlePreviewTarget = (target: HTMLElement) => {
     if (!targetMode || !activePage) return
-    const target = e.target as HTMLElement
-    const text = target.textContent?.trim()
-    if (text && activePage.content.includes(text)) {
-      const idx = activePage.content.indexOf(text)
+    const now = Date.now()
+    if (now - lastTargetHandledRef.current < 250) return
+    lastTargetHandledRef.current = now
+
+    const content = activePage.content
+
+    // Check if clicking inside an existing mark tag to toggle or recolor
+    const existingMark = target.closest('mark')
+    if (existingMark && targetMode === 'highlight') {
+      const markText = existingMark.textContent?.trim() || ''
+      if (markText) {
+        const escaped = markText.slice(0, 15).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const markPattern = new RegExp(`<mark\\s+class="hl-[a-z]+">([\\s\\S]*?${escaped}[\\s\\S]*?)<\\/mark>`, 'i')
+        const match = markPattern.exec(content)
+        if (match) {
+          const isSameColor = existingMark.className.includes(`hl-${selectedColor}`)
+          const replacement = isSameColor ? match[1] : `<mark class="hl-${selectedColor}">${match[1]}</mark>`
+          const newContent = content.slice(0, match.index) + replacement + content.slice(match.index + match[0].length)
+          setHistoryStack(prev => [...prev.slice(-30), content])
+          onUpdatePageField('content', newContent)
+          onShowToast?.(isSameColor ? 'Removed highlight' : `Updated highlight to ${selectedColor}!`)
+          setTargetMode(null)
+          return
+        }
+      }
+    }
+
+    if (target === markdownPreview.current) return
+    let text = target.innerText?.trim() || target.textContent?.trim() || ''
+    if (!text) return
+
+    const range = findTextOffsetsInContent(content, text)
+    if (range) {
       if (targetMode === 'bookmark') {
-        applyBookmarkAtPos(selectedColor, idx)
+        applyBookmarkAtPos(selectedColor, range.start)
       } else {
-        applyHighlightRange(selectedColor, idx, idx + text.length)
+        applyHighlightRange(selectedColor, range.start, range.end)
       }
       setTargetMode(null)
+      return
+    }
+
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 5)
+    for (const line of lines) {
+      const lineRange = findTextOffsetsInContent(content, line)
+      if (lineRange) {
+        if (targetMode === 'bookmark') {
+          applyBookmarkAtPos(selectedColor, lineRange.start)
+        } else {
+          applyHighlightRange(selectedColor, lineRange.start, lineRange.end)
+        }
+        setTargetMode(null)
+        return
+      }
+    }
+
+    onShowToast?.('Could not locate exact line in markdown source.')
+    setTargetMode(null)
+  }
+
+  const handlePreviewClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (!targetMode || !activePage) return
+    handlePreviewTarget(e.target as HTMLElement)
+  }
+
+  const handlePreviewTouchEnd = (e: React.TouchEvent<HTMLElement>) => {
+    if (!targetMode || !activePage) return
+    const touch = e.changedTouches[0]
+    if (!touch) return
+    const elem = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null
+    if (elem && markdownPreview.current?.contains(elem)) {
+      handlePreviewTarget(elem)
     }
   }
 
@@ -482,6 +668,19 @@ export function Workspace({
     hasMovedRef.current = false
   }
 
+  const handleBallTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length !== 1) return
+    const touch = e.touches[0]
+    setIsDragging(true)
+    dragStartRef.current = {
+      mouseX: touch.clientX,
+      mouseY: touch.clientY,
+      ballX: ballPos.x,
+      ballY: ballPos.y
+    }
+    hasMovedRef.current = false
+  }
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!dragStartRef.current) return
@@ -491,8 +690,9 @@ export function Workspace({
         hasMovedRef.current = true
       }
       if (hasMovedRef.current) {
-        const dockW = ballExpanded ? 340 : 48
-        const dockH = ballExpanded ? 48 : 48
+        const isMobile = window.innerWidth <= 768
+        const dockW = (!isMobile && ballExpanded) ? 340 : 48
+        const dockH = (!isMobile && ballExpanded) ? 48 : 48
         const newX = Math.max(8, Math.min(window.innerWidth - dockW - 8, dragStartRef.current.ballX + dx))
         const newY = Math.max(8, Math.min(window.innerHeight - dockH - 8, dragStartRef.current.ballY + dy))
         setBallPos({ x: newX, y: newY })
@@ -504,11 +704,41 @@ export function Workspace({
       setIsDragging(false)
     }
 
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!dragStartRef.current || e.touches.length !== 1) return
+      const touch = e.touches[0]
+      const dx = touch.clientX - dragStartRef.current.mouseX
+      const dy = touch.clientY - dragStartRef.current.mouseY
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        hasMovedRef.current = true
+        if (e.cancelable) e.preventDefault()
+      }
+      if (hasMovedRef.current) {
+        const isMobile = window.innerWidth <= 768
+        const dockW = (!isMobile && ballExpanded) ? 340 : 48
+        const dockH = (!isMobile && ballExpanded) ? 48 : 48
+        const newX = Math.max(8, Math.min(window.innerWidth - dockW - 8, dragStartRef.current.ballX + dx))
+        const newY = Math.max(8, Math.min(window.innerHeight - dockH - 8, dragStartRef.current.ballY + dy))
+        setBallPos({ x: newX, y: newY })
+      }
+    }
+
+    const handleTouchEnd = () => {
+      dragStartRef.current = null
+      setIsDragging(false)
+    }
+
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
+    window.addEventListener('touchmove', handleTouchMove, { passive: false })
+    window.addEventListener('touchend', handleTouchEnd)
+    window.addEventListener('touchcancel', handleTouchEnd)
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
+      window.removeEventListener('touchmove', handleTouchMove)
+      window.removeEventListener('touchend', handleTouchEnd)
+      window.removeEventListener('touchcancel', handleTouchEnd)
     }
   }, [ballExpanded])
 
@@ -761,7 +991,9 @@ export function Workspace({
           <button className="ws-icon-btn ws-menu-btn" onClick={() => setMobileNav(true)} aria-label="Open navigation">
             <Menu size={19} />
           </button>
-          <nav className="ws-breadcrumbs" aria-label="Breadcrumb">
+
+          {/* Desktop breadcrumb trail: Kept 100% intact for PC & laptop users */}
+          <nav className="ws-breadcrumbs ws-breadcrumbs-desktop" aria-label="Breadcrumb">
             <Link to="/" className="ws-breadcrumb-home" title="Home"><Home size={14} /></Link>
             <ChevronRight size={12} />
             <Link to="/users" className="ws-breadcrumb-users" title="All profiles"><Users size={13} /> Profiles</Link>
@@ -770,10 +1002,30 @@ export function Workspace({
             {activeFolder && <><ChevronRight size={12} /><span>{activeFolder.name}</span></>}
             {activePage && <><ChevronRight size={12} /><strong>{activePage.title || 'Untitled'}</strong></>}
           </nav>
+
+          {/* Innovative Mobile Breadcrumb / Title Pill (optimized for phones) */}
+          <div className="ws-breadcrumbs-mobile" aria-label="Mobile Navigation">
+            <div className="ws-mobile-context-pill">
+              {activeFolder && <span className="ws-mobile-folder-tag">{activeFolder.name}</span>}
+              {activeFolder && <ChevronRight size={10} className="ws-mobile-chevron" />}
+              <strong className="ws-mobile-page-title">{activePage?.title || 'Untitled'}</strong>
+            </div>
+            <span className={`ws-mobile-sync-dot ${sync}`} title={`Status: ${statusText[sync]}`} />
+          </div>
+
+          {/* Note Packet Logo and Name in Mobile Center Space (Mobile Only) */}
+          <Link to="/" className="ws-mobile-brand" title="Note Packet Workspace">
+            <div className="brand-sq ws-mobile-brand-sq">n.</div>
+            <div className="ws-brand-text ws-mobile-brand-text">
+              <strong>Note Packet</strong>
+              <small>WORKSPACE</small>
+            </div>
+          </Link>
+
           <div className="ws-top-actions">
-            {/* Quick theme selector in topbar */}
+            {/* Quick theme selector in topbar (Desktop only) */}
             <select
-              className="ws-topbar-theme-select"
+              className="ws-topbar-theme-select ws-desktop-only"
               value={theme}
               onChange={e => onSetTheme(e.target.value)}
               aria-label="Choose theme"
@@ -783,7 +1035,7 @@ export function Workspace({
               ))}
             </select>
             <button
-              className="ws-icon-btn"
+              className="ws-icon-btn ws-theme-toggle-btn"
               onClick={onToggleTheme}
               title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
             >
@@ -792,21 +1044,116 @@ export function Workspace({
             <span className={`ws-save-pill ${sync}`} title={lastSync}>
               {statusIcon}<span>{statusText[sync]}</span>
             </span>
-            <button className="ws-icon-btn" onClick={() => onCopy(activePage?.content || '', 'Content copied')} title="Copy page text" disabled={!activePage}>
+            <button className="ws-icon-btn ws-desktop-only" onClick={() => onCopy(activePage?.content || '', 'Content copied')} title="Copy page text" disabled={!activePage}>
               <Clipboard size={16} />
             </button>
-            <button className="ws-icon-btn" onClick={onShareNote} disabled={!activePage} title="Share note">
+            <button className="ws-icon-btn ws-desktop-only" onClick={onShareNote} disabled={!activePage} title="Share note">
               <Share2 size={16} />
             </button>
-            <button className="ws-icon-btn" onClick={onExportNote} disabled={!activePage} title="Download note">
+            <button className="ws-icon-btn ws-desktop-only" onClick={onExportNote} disabled={!activePage} title="Download note">
               <Download size={16} />
             </button>
-            <button className="ws-outline-btn ws-pdf-btn" onClick={() => window.print()} disabled={!activePage} title="Export PDF">
+            <button className="ws-outline-btn ws-pdf-btn ws-desktop-only" onClick={() => window.print()} disabled={!activePage} title="Export PDF">
               <Download size={13} /> PDF
             </button>
-            <button className="ws-new-note-btn" onClick={() => onAsk('page')}>
+            <button className="ws-new-note-btn ws-desktop-only" onClick={() => onAsk('page')}>
               <Plus size={15} /> New note
             </button>
+
+            {/* Mobile "More Actions" Menu (Phone only) */}
+            <div className="ws-mobile-more-wrapper" ref={mobileMoreRef}>
+              <button
+                type="button"
+                className={`ws-icon-btn ws-mobile-more-btn ${showMobileMore ? 'active' : ''}`}
+                onClick={() => setShowMobileMore(v => !v)}
+                title="More note actions"
+                aria-label="More actions"
+              >
+                <MoreHorizontal size={17} />
+              </button>
+
+              {showMobileMore && (
+                <div className="ws-mobile-more-dropdown">
+                  <div className="ws-mobile-more-header">
+                    <span>Note Options</span>
+                    <button type="button" className="ws-bm-close" onClick={() => setShowMobileMore(false)}>
+                      <X size={13} />
+                    </button>
+                  </div>
+
+                  <div className="ws-mobile-more-section">
+                    <label className="ws-mobile-more-label">Theme</label>
+                    <select
+                      className="ws-mobile-theme-select"
+                      value={theme}
+                      onChange={e => {
+                        onSetTheme(e.target.value)
+                        setShowMobileMore(false)
+                      }}
+                    >
+                      {themeOptions.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="ws-mobile-more-actions">
+                    <button
+                      type="button"
+                      className="ws-mobile-more-item"
+                      onClick={() => {
+                        onCopy(activePage?.content || '', 'Content copied')
+                        setShowMobileMore(false)
+                      }}
+                      disabled={!activePage}
+                    >
+                      <Clipboard size={14} /> <span>Copy note text</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="ws-mobile-more-item"
+                      onClick={() => {
+                        onShareNote()
+                        setShowMobileMore(false)
+                      }}
+                      disabled={!activePage}
+                    >
+                      <Share2 size={14} /> <span>Share note</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="ws-mobile-more-item"
+                      onClick={() => {
+                        onExportNote()
+                        setShowMobileMore(false)
+                      }}
+                      disabled={!activePage}
+                    >
+                      <Download size={14} /> <span>Export Markdown</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="ws-mobile-more-item"
+                      onClick={() => {
+                        window.print()
+                        setShowMobileMore(false)
+                      }}
+                      disabled={!activePage}
+                    >
+                      <Download size={14} /> <span>Export PDF</span>
+                    </button>
+
+                    <div className="ws-mobile-more-sync">
+                      {statusIcon}
+                      <span>{sync === 'saved' ? `Synced · ${lastSync || 'Now'}` : statusText[sync]}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -858,6 +1205,7 @@ export function Workspace({
                           key={c.id}
                           type="button"
                           className={`ws-hl-swatch ${c.id} ${selectedColor === c.id ? 'active' : ''}`}
+                          onMouseDown={e => { e.preventDefault(); handleSwatchClick(c.id); }}
                           onClick={() => handleSwatchClick(c.id)}
                           title={`Select ${c.label} (${c.id})`}
                           aria-label={c.label}
@@ -869,8 +1217,9 @@ export function Workspace({
                   <button
                     type="button"
                     className={`ws-hl-action-btn ${targetMode === 'highlight' ? 'active-target' : ''}`}
+                    onMouseDown={e => e.preventDefault()}
                     onClick={() => applyHighlight(selectedColor)}
-                    title={targetMode === 'highlight' ? 'Highlight mode active — click any line or drag to highlight (or Esc to cancel)' : 'Highlight selected text or click a line'}
+                    title={targetMode === 'highlight' ? 'Highlight mode active — tap any line or drag to highlight (or Esc to cancel)' : 'Highlight selected text or click a line'}
                   >
                     <Highlighter size={13} />
                     <span>{targetMode === 'highlight' ? 'Pick a line…' : 'Highlight'}</span>
@@ -881,8 +1230,9 @@ export function Workspace({
                   <button
                     type="button"
                     className={`ws-hl-action-btn ws-bm-btn ${targetMode === 'bookmark' ? 'active-target' : ''}`}
+                    onMouseDown={e => e.preventDefault()}
                     onClick={() => applyBookmark(selectedColor)}
-                    title={targetMode === 'bookmark' ? 'Bookmark mode active — click the exact line to bookmark (or Esc to cancel)' : `Bookmark line with ${selectedColor}`}
+                    title={targetMode === 'bookmark' ? 'Bookmark mode active — tap the exact line to bookmark (or Esc to cancel)' : `Bookmark line with ${selectedColor}`}
                   >
                     <Bookmark size={13} />
                     <span>{targetMode === 'bookmark' ? 'Pick a line…' : 'Bookmark line'}</span>
@@ -949,6 +1299,7 @@ export function Workspace({
                   <button
                     type="button"
                     className="ws-hl-tool-btn"
+                    onMouseDown={e => e.preventDefault()}
                     onClick={handleUndo}
                     disabled={historyStack.length === 0}
                     title={historyStack.length > 0 ? "Undo last highlight/bookmark" : "Nothing to undo"}
@@ -960,6 +1311,7 @@ export function Workspace({
                   <button
                     type="button"
                     className={`ws-hl-tool-btn ws-hl-save-btn ${justSaved ? 'saved' : ''}`}
+                    onMouseDown={e => e.preventDefault()}
                     onClick={handleSaveHighlight}
                     title="Save current highlights & bookmarks"
                   >
@@ -970,6 +1322,7 @@ export function Workspace({
                   <button
                     type="button"
                     className="ws-hl-tool-btn ws-hl-reset-btn"
+                    onMouseDown={e => e.preventDefault()}
                     onClick={handleResetFormat}
                     title="Reset to old document format (removes all highlights and bookmarks)"
                   >
@@ -982,6 +1335,7 @@ export function Workspace({
                       ref={markdownPreview}
                       className={`ws-markdown-preview ${targetMode ? 'ws-targeting-active' : ''}`}
                       onClick={handlePreviewClick}
+                      onTouchEnd={handlePreviewTouchEnd}
                       dangerouslySetInnerHTML={{ __html: markdownHtml }}
                     />
                   : <textarea
@@ -1043,10 +1397,11 @@ export function Workspace({
             type="button"
             className="ws-quick-ball"
             onMouseDown={handleBallMouseDown}
+            onTouchStart={handleBallTouchStart}
             onClick={() => {
               if (!hasMovedRef.current) setBallExpanded(true)
             }}
-            title="Quick Highlight & Bookmark Ball (drag to move, click to expand)"
+            title="Quick Highlight & Bookmark Ball (drag to move, tap to expand)"
             style={{ '--ball-accent': HIGHLIGHT_COLORS.find(c => c.id === selectedColor)?.hex || '#EAB308' } as React.CSSProperties}
           >
             <div className="ws-quick-ball-inner">
@@ -1059,6 +1414,7 @@ export function Workspace({
             <div
               className="ws-quick-dock-handle"
               onMouseDown={handleBallMouseDown}
+              onTouchStart={handleBallTouchStart}
               title="Drag dock anywhere"
             >
               <GripVertical size={14} />
@@ -1070,6 +1426,7 @@ export function Workspace({
                   key={c.id}
                   type="button"
                   className={`ws-quick-swatch ${c.id} ${selectedColor === c.id ? 'active' : ''}`}
+                  onMouseDown={e => { e.preventDefault(); handleSwatchClick(c.id); }}
                   onClick={() => handleSwatchClick(c.id)}
                   title={c.label}
                   aria-label={c.label}
@@ -1082,8 +1439,9 @@ export function Workspace({
             <button
               type="button"
               className={`ws-quick-btn ${targetMode === 'highlight' ? 'active-target' : ''}`}
+              onMouseDown={e => e.preventDefault()}
               onClick={() => applyHighlight(selectedColor)}
-              title={targetMode === 'highlight' ? 'Click line to highlight (or click to cancel)' : 'Highlight (select text or click line)'}
+              title={targetMode === 'highlight' ? 'Tap line to highlight (or tap to cancel)' : 'Highlight (select text or tap line)'}
             >
               <Highlighter size={13} />
               <span>{targetMode === 'highlight' ? 'Pick line…' : 'Highlight'}</span>
@@ -1092,8 +1450,9 @@ export function Workspace({
             <button
               type="button"
               className={`ws-quick-btn ws-quick-bm-btn ${targetMode === 'bookmark' ? 'active-target' : ''}`}
+              onMouseDown={e => e.preventDefault()}
               onClick={() => applyBookmark(selectedColor)}
-              title={targetMode === 'bookmark' ? 'Click line to bookmark (or click to cancel)' : 'Bookmark line'}
+              title={targetMode === 'bookmark' ? 'Tap line to bookmark (or tap to cancel)' : 'Bookmark line'}
             >
               <Bookmark size={13} />
               <span>{targetMode === 'bookmark' ? 'Pick line…' : 'Bookmark'}</span>
@@ -1104,6 +1463,7 @@ export function Workspace({
             <button
               type="button"
               className="ws-quick-icon-btn"
+              onMouseDown={e => e.preventDefault()}
               onClick={handleUndo}
               disabled={historyStack.length === 0}
               title="Undo last format"
@@ -1114,6 +1474,7 @@ export function Workspace({
             <button
               type="button"
               className="ws-quick-icon-btn ws-quick-reset"
+              onMouseDown={e => e.preventDefault()}
               onClick={handleResetFormat}
               title="Reset format"
             >

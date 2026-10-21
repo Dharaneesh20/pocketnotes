@@ -3,8 +3,19 @@
 /* ═══════════════════════════════════════════════════════
    NOTE PACKET — COMPLETE DESIGN SYSTEM
    ═══════════════════════════════════════════════════════ */
-/* prevent horizontal overflow from any section */
+/* prevent horizontal overflow from any section and stabilize scrollbar width */
+html {
+  scrollbar-gutter: stable;
+}
 .landing { overflow-x: hidden; }
+
+/* Suppress all animations and transitions during active window dragging/scaling */
+body.is-resizing *,
+body.is-resizing *::before,
+body.is-resizing *::after {
+  transition: none !important;
+  animation: none !important;
+}
 
 /* ── Design Tokens & Themes ── */
 :root {
@@ -1066,6 +1077,7 @@ img, svg { display: block; }
 .ws-shell {
   min-height: 100vh; display: flex;
   background: var(--page-bg); color: var(--ink);
+  overflow-x: clip;
 }
 
 /* ── Sidebar ── */
@@ -1073,7 +1085,9 @@ img, svg { display: block; }
   width: var(--sidebar-w); flex: 0 0 var(--sidebar-w);
   background: var(--surface); border-right: 1.5px solid var(--border);
   display: flex; flex-direction: column;
-  height: 100vh; position: sticky; top: 0; overflow: hidden;
+  height: 100vh;
+  position: fixed; top: 0; left: 0; bottom: 0;
+  overflow: hidden;
   z-index: 10;
 }
 .ws-sidebar-head {
@@ -1257,7 +1271,14 @@ img, svg { display: block; }
 .ws-credit a { display: inline-flex; align-items: center; gap: 4px; color: var(--ink); font-weight: 600; text-decoration: underline; }
 
 /* ── Main ── */
-.ws-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 100vh; }
+.ws-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  margin-left: var(--sidebar-w);
+}
 
 /* ── Topbar ── */
 .ws-topbar {
@@ -1275,6 +1296,9 @@ img, svg { display: block; }
 .ws-breadcrumb-home:hover { color: var(--ink); }
 .ws-breadcrumbs span { color: var(--muted); white-space: nowrap; }
 .ws-breadcrumbs strong { color: var(--ink); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-breadcrumbs-mobile { display: none; }
+.ws-mobile-more-wrapper { display: none; }
+.ws-mobile-brand { display: none; }
 .ws-top-actions { display: flex; align-items: center; gap: 8px; }
 .ws-save-pill {
   display: flex; align-items: center; gap: 5px;
@@ -2005,7 +2029,7 @@ img, svg { display: block; }
 .print-header, .print-note, .print-footer { display: none; }
 @media print {
   .ws-sidebar, .ws-topbar, .ws-editor-head, .ws-editor-meta, .ws-note-editor, .ws-editor-footer, .ws-welcome, .ws-fab { display: none !important; }
-  .ws-shell, .ws-main, .ws-content, .ws-editor-panel { display: block; min-height: 0; background: #fff; }
+  .ws-shell, .ws-main, .ws-content, .ws-editor-panel { display: block; min-height: 0; background: #fff; margin-left: 0 !important; }
   .ws-editor-panel { padding: 0; }
   .print-header { display: flex; align-items: center; gap: 9px; border-bottom: 1px solid #bbb; padding: 0 0 14px; margin-bottom: 26px; font-size: 11px; color: #555; }
   .print-header strong { font-size: 16px; color: #111; }
@@ -2060,19 +2084,362 @@ img, svg { display: block; }
   /* Sidebar to drawer */
   .ws-sidebar {
     position: fixed; top: 0; left: 0; bottom: 0;
-    transform: translateX(-110%); transition: transform .2s ease;
+    transform: translateX(-110%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform .22s cubic-bezier(0.16, 1, 0.3, 1), visibility .22s;
     box-shadow: none; z-index: 20;
   }
   .ws-sidebar-open {
     transform: translateX(0);
-    box-shadow: 8px 0 32px rgba(0,0,0,.15);
+    visibility: visible;
+    pointer-events: auto;
+    box-shadow: 8px 0 32px rgba(0,0,0,.22);
   }
   .ws-scrim { display: block; }
   .ws-mobile-close { display: grid; }
   .ws-menu-btn { display: grid; }
-  .ws-topbar { padding: 0 16px; gap: 8px; }
-  .ws-top-actions .ws-save-pill, .ws-top-actions > .ws-icon-btn:not(.ws-menu-btn), .ws-pdf-btn { display: none; }
-  .ws-editor-panel { padding: 24px 20px 20px; }
+  .ws-main { margin-left: 0 !important; }
+  /* ── Innovative Mobile Topbar & Actions ── */
+  .ws-topbar {
+    padding: 0 12px;
+    gap: 8px;
+    height: 54px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .ws-breadcrumbs-desktop {
+    display: none !important;
+  }
+  .ws-breadcrumbs-mobile {
+    display: flex !important;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 1;
+    min-width: 0;
+    margin: 0 4px;
+  }
+  .ws-mobile-context-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--page-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 3px 9px;
+    font-size: 12px;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .ws-mobile-folder-tag {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 65px;
+  }
+  .ws-mobile-chevron {
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .ws-mobile-page-title {
+    color: var(--ink);
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 85px;
+  }
+  .ws-mobile-sync-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--muted);
+    transition: background 0.3s ease;
+  }
+  .ws-mobile-sync-dot.saved {
+    background: var(--success);
+    box-shadow: 0 0 6px var(--success);
+  }
+  .ws-mobile-sync-dot.saving,
+  .ws-mobile-sync-dot.loading {
+    background: var(--yellow);
+    animation: pulse 1s infinite;
+  }
+  .ws-mobile-sync-dot.error {
+    background: var(--danger);
+  }
+
+  /* Note Packet Logo & Name in Center of Mobile Topbar */
+  .ws-mobile-brand {
+    display: flex !important;
+    align-items: center;
+    gap: 7px;
+    text-decoration: none;
+    color: inherit;
+    flex-shrink: 0;
+    margin: 0 auto;
+    padding: 2px 6px;
+    border-radius: 8px;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+  }
+  .ws-mobile-brand:hover {
+    opacity: 0.85;
+  }
+  .ws-mobile-brand:active {
+    transform: scale(0.96);
+  }
+  .ws-mobile-brand-sq {
+    width: 24px !important;
+    height: 24px !important;
+    font-size: 13px !important;
+    border-radius: 6px !important;
+    box-shadow: 1.5px 1.5px 0 #111 !important;
+    border-width: 1.5px !important;
+    flex-shrink: 0;
+  }
+  .ws-mobile-brand-text {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .ws-mobile-brand-text strong {
+    display: block;
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--ink);
+    line-height: 1.1;
+    letter-spacing: -0.2px;
+    white-space: nowrap;
+  }
+  .ws-mobile-brand-text small {
+    display: block;
+    font-size: 7.5px;
+    font-weight: 700;
+    letter-spacing: 0.9px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-top: 1px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .ws-desktop-only {
+    display: none !important;
+  }
+  .ws-top-actions {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+  .ws-top-actions .ws-save-pill,
+  .ws-top-actions .ws-pdf-btn,
+  .ws-top-actions > .ws-icon-btn:not(.ws-menu-btn):not(.ws-theme-toggle-btn):not(.ws-mobile-more-btn) {
+    display: none !important;
+  }
+  .ws-top-actions > .ws-theme-toggle-btn {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+  }
+
+  /* Mobile More Actions Menu */
+  .ws-mobile-more-wrapper {
+    display: inline-block !important;
+    position: relative;
+  }
+  .ws-mobile-more-btn {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .ws-mobile-more-btn.active {
+    background: var(--accent) !important;
+    color: var(--accent-ink) !important;
+    border-color: var(--ink) !important;
+  }
+  .ws-mobile-more-dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 240px;
+    background: var(--surface);
+    border: 1.5px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.28);
+    z-index: 1000;
+    padding: 6px 0;
+    display: flex;
+    flex-direction: column;
+    animation: mobileMoreIn 0.16s ease-out;
+  }
+  @keyframes mobileMoreIn {
+    from { opacity: 0; transform: translateY(-5px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .ws-mobile-more-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px 6px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--muted);
+  }
+  .ws-mobile-more-section {
+    padding: 8px 12px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .ws-mobile-more-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .ws-mobile-theme-select {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--page-bg);
+    color: var(--ink);
+    outline: none;
+  }
+  .ws-mobile-more-actions {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 6px;
+  }
+  .ws-mobile-more-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    font-size: 12.5px;
+    font-weight: 500;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s ease;
+  }
+  .ws-mobile-more-item:hover,
+  .ws-mobile-more-item:active {
+    background: var(--page-bg);
+  }
+  .ws-mobile-more-sync {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    margin-top: 4px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── Mobile Highlighter Toolbar: 1-row scrollable, touch-friendly ── */
+  .ws-hl-toolbar {
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 6px 10px;
+    gap: 7px;
+    margin: 6px 0 10px 0;
+    border-radius: 12px;
+  }
+  .ws-hl-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .ws-hl-group {
+    flex-shrink: 0;
+    gap: 6px;
+  }
+  .ws-hl-swatch {
+    width: 25px !important;
+    height: 25px !important;
+    flex-shrink: 0;
+  }
+  .ws-hl-action-btn,
+  .ws-hl-tool-btn {
+    flex-shrink: 0;
+    padding: 6px 10px;
+    font-size: 11.5px;
+    min-height: 34px;
+    border-radius: 8px;
+  }
+
+  /* ── Mobile Quick Dock Docking ── */
+  .ws-quick-ball-container.expanded {
+    left: 12px !important;
+    right: 12px !important;
+    top: auto !important;
+    bottom: 84px !important;
+    width: auto !important;
+    max-width: calc(100vw - 24px) !important;
+    display: flex !important;
+    justify-content: center !important;
+    z-index: 9999 !important;
+  }
+  .ws-quick-dock {
+    width: 100% !important;
+    max-width: 440px !important;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-radius: 24px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.38);
+    background: var(--surface);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+  .ws-quick-swatch {
+    width: 22px !important;
+    height: 22px !important;
+    flex-shrink: 0;
+  }
+  .ws-quick-btn {
+    padding: 6px 10px;
+    font-size: 11.5px;
+    border-radius: 14px;
+    min-height: 32px;
+  }
+  .ws-quick-icon-btn {
+    width: 30px;
+    height: 30px;
+  }
+
+  .ws-editor-panel { padding: 20px 16px 16px; }
   .ws-title-input { font-size: 24px; }
   .ws-fab { display: grid; }
   body { padding-bottom: 80px; }
