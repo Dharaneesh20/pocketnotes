@@ -375,7 +375,10 @@ export default function App() {
           const raw = chart.trim()
           return `<div class="mermaid" data-chart="${encodeURIComponent(raw)}">${raw.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`
         }), { async: false }),
-        { ADD_ATTR: ['data-chart'] }
+        {
+          ADD_TAGS: ['mark', 'span'],
+          ADD_ATTR: ['data-chart', 'data-bm', 'data-color', 'class', 'title']
+        }
       )
     : ''
 
@@ -446,6 +449,7 @@ export default function App() {
           markdownHtml={markdownHtml}
           requiresPin={requiresPin}
           route={route}
+          onShowToast={showToast}
         />
       )}
 

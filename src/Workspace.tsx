@@ -7,9 +7,21 @@ import {
   Check, ChevronRight, Clipboard, Cloud, CloudOff, Copy, Download,
   FilePlus2, Folder, FolderPlus, Github, Menu, Moon, MoreHorizontal,
   Pencil, Plus, Search, Settings2, Share2, Sun, Trash2, Upload,
-  Users, X, ArrowLeft, Home, LogOut, FileText, Eye, Edit2
+  Users, X, ArrowLeft, Home, LogOut, FileText, Eye, Edit2,
+  Highlighter, Bookmark, RotateCcw, Eraser, BookmarkCheck,
+  GripVertical, Minimize2
 } from 'lucide-react'
 import type { Notebook, User, Folder as NoteFolder, Page } from './types'
+
+type HighlightColor = 'yellow' | 'green' | 'pink' | 'cyan' | 'orange'
+
+const HIGHLIGHT_COLORS: { id: HighlightColor; label: string; hex: string }[] = [
+  { id: 'yellow', label: 'Canary Yellow', hex: '#EAB308' },
+  { id: 'green', label: 'Fresh Emerald', hex: '#22C55E' },
+  { id: 'pink', label: 'Neon Pink', hex: '#EC4899' },
+  { id: 'cyan', label: 'Sky Cyan', hex: '#0EA5E9' },
+  { id: 'orange', label: 'Sunset Amber', hex: '#F97316' }
+]
 
 interface WorkspaceProps {
   data: Notebook
@@ -37,6 +49,7 @@ interface WorkspaceProps {
   onImport: (file?: File) => void
   onExportNtid: (user: User) => void
   onSignOut: () => void
+  onShowToast?: (msg: string) => void
   workspace: string
   shareWorkspace: string
   markdownHtml: string
@@ -50,12 +63,26 @@ export function Workspace({
   onToggleTheme, onSetTheme, onSetPreview, onToggleFolder,
   onUpdatePageField, onAsk, onOpenUser, onCopy,
   onShareNote, onExportNote, onExportNotePacket, onExportJson, onImport, onExportNtid, onSignOut,
-  workspace, shareWorkspace, markdownHtml, requiresPin, route
+  onShowToast, workspace, shareWorkspace, markdownHtml, requiresPin, route
 }: WorkspaceProps) {
   const isDark = themeMode === 'dark'
   const [mobileNav, setMobileNav] = React.useState(false)
   const [showSettings, setShowSettings] = React.useState(false)
   const [showWorkspaceLink, setShowWorkspaceLink] = React.useState(false)
+  const [selectedColor, setSelectedColor] = React.useState<HighlightColor>('yellow')
+  const [historyStack, setHistoryStack] = React.useState<string[]>([])
+  const [showBookmarksMenu, setShowBookmarksMenu] = React.useState(false)
+  const [justSaved, setJustSaved] = React.useState(false)
+  const [targetMode, setTargetMode] = React.useState<'highlight' | 'bookmark' | null>(null)
+  const [ballExpanded, setBallExpanded] = React.useState<boolean>(false)
+  const [ballPos, setBallPos] = React.useState<{ x: number; y: number }>(() => ({
+    x: typeof window !== 'undefined' ? Math.max(20, window.innerWidth - 80) : 800,
+    y: 160
+  }))
+  const [isDragging, setIsDragging] = React.useState(false)
+  const dragStartRef = useRef<{ mouseX: number; mouseY: number; ballX: number; ballY: number } | null>(null)
+  const hasMovedRef = useRef<boolean>(false)
+  const bmMenuRef = useRef<HTMLDivElement>(null)
   const editor = useRef<HTMLTextAreaElement>(null)
   const markdownPreview = useRef<HTMLElement>(null)
   const importRef = useRef<HTMLInputElement>(null)
@@ -265,6 +292,285 @@ export function Workspace({
     })
     mermaid.run({ nodes }).catch(() => {})
   }, [preview, activePage?.content, theme, isDark])
+
+  const bookmarks = React.useMemo(() => {
+    if (!activePage?.content) return []
+    const list: { color: HighlightColor; text: string; raw: string; index: number }[] = []
+    const regex = /<span\s+class="bm-pin\s+bm-([a-z]+)"[^>]*>.*?<\/span>\s*([^\n\r]*)/gi
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(activePage.content)) !== null) {
+      list.push({
+        color: (match[1] || 'yellow') as HighlightColor,
+        text: match[2]?.replace(/<[^>]+>/g, '').trim() || 'Bookmarked line',
+        raw: match[0],
+        index: match.index
+      })
+    }
+    return list
+  }, [activePage?.content])
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (bmMenuRef.current && !bmMenuRef.current.contains(e.target as Node)) {
+        setShowBookmarksMenu(false)
+      }
+    }
+    if (showBookmarksMenu) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showBookmarksMenu])
+
+  const applyBookmarkAtPos = (color: HighlightColor, pos: number) => {
+    if (!activePage) return
+    const text = activePage.content
+    const lineStart = text.lastIndexOf('\n', pos - 1) + 1
+    let lineEnd = text.indexOf('\n', pos)
+    if (lineEnd === -1) lineEnd = text.length
+
+    const lineContent = text.slice(lineStart, lineEnd)
+    const cleanLine = lineContent.replace(/<span\s+class="bm-pin[^"]*"[^>]*>.*?<\/span>\s*/gi, '')
+    const bookmarkTag = `<span class="bm-pin bm-${color}" data-bm="true" title="Bookmarked line">🔖 [${color.toUpperCase()}]</span> `
+    const newContent = text.slice(0, lineStart) + bookmarkTag + cleanLine + text.slice(lineEnd)
+
+    setHistoryStack(prev => [...prev.slice(-30), text])
+    onUpdatePageField('content', newContent)
+    onShowToast?.(`Line bookmarked with ${color}!`)
+
+    if (!preview && editor.current) {
+      const newCursor = lineStart + bookmarkTag.length
+      setTimeout(() => {
+        editor.current?.focus()
+        editor.current?.setSelectionRange(newCursor, newCursor)
+      }, 40)
+    }
+  }
+
+  const applyHighlightRange = (color: HighlightColor, start: number, end: number) => {
+    if (!activePage) return
+    const text = activePage.content
+    let newContent = ''
+    let newEnd = end
+
+    if (start !== end) {
+      const selected = text.slice(start, end)
+      const wrapped = `<mark class="hl-${color}">${selected}</mark>`
+      newContent = text.slice(0, start) + wrapped + text.slice(end)
+      newEnd = start + wrapped.length
+    } else {
+      const lineStart = text.lastIndexOf('\n', start - 1) + 1
+      let lineEnd = text.indexOf('\n', end)
+      if (lineEnd === -1) lineEnd = text.length
+      const line = text.slice(lineStart, lineEnd)
+      if (!line.trim()) {
+        onShowToast?.('Click on text or drag to select words to highlight.')
+        return
+      }
+      const wrapped = `<mark class="hl-${color}">${line}</mark>`
+      newContent = text.slice(0, lineStart) + wrapped + text.slice(lineEnd)
+      newEnd = lineStart + wrapped.length
+    }
+
+    setHistoryStack(prev => [...prev.slice(-30), text])
+    onUpdatePageField('content', newContent)
+    onShowToast?.(`Highlighted with ${color}!`)
+    setTimeout(() => {
+      editor.current?.focus()
+      editor.current?.setSelectionRange(newEnd, newEnd)
+    }, 40)
+  }
+
+  const applyHighlight = (color: HighlightColor) => {
+    if (!activePage) return
+    const el = editor.current
+    if (!preview && el && el.selectionStart !== el.selectionEnd) {
+      applyHighlightRange(color, el.selectionStart, el.selectionEnd)
+      setTargetMode(null)
+      return
+    }
+    const sel = window.getSelection()?.toString().trim()
+    if (preview && sel && activePage.content.includes(sel)) {
+      const idx = activePage.content.indexOf(sel)
+      applyHighlightRange(color, idx, idx + sel.length)
+      setTargetMode(null)
+      return
+    }
+    setTargetMode(curr => {
+      const next = curr === 'highlight' ? null : 'highlight'
+      if (next) onShowToast?.('🖍️ Highlight mode: click any line or drag to highlight (or Esc to cancel)')
+      return next
+    })
+  }
+
+  const handleSwatchClick = (color: HighlightColor) => {
+    setSelectedColor(color)
+    const el = editor.current
+    if (!preview && el && el.selectionStart !== el.selectionEnd) {
+      applyHighlightRange(color, el.selectionStart, el.selectionEnd)
+    }
+  }
+
+  const applyBookmark = (color: HighlightColor) => {
+    if (!activePage) return
+    const el = editor.current
+    if (!preview && el && el.selectionStart !== el.selectionEnd) {
+      applyBookmarkAtPos(color, el.selectionStart)
+      setTargetMode(null)
+      return
+    }
+    setTargetMode(curr => {
+      const next = curr === 'bookmark' ? null : 'bookmark'
+      if (next) onShowToast?.('🔖 Bookmark mode: click the exact line to bookmark (or Esc to cancel)')
+      return next
+    })
+  }
+
+  const handleEditorClick = () => {
+    if (!targetMode || !activePage) return
+    const el = editor.current
+    if (!el) return
+    setTimeout(() => {
+      const pos = el.selectionStart
+      if (targetMode === 'bookmark') {
+        applyBookmarkAtPos(selectedColor, pos)
+      } else if (targetMode === 'highlight') {
+        if (el.selectionStart !== el.selectionEnd) {
+          applyHighlightRange(selectedColor, el.selectionStart, el.selectionEnd)
+        } else {
+          applyHighlightRange(selectedColor, pos, pos)
+        }
+      }
+      setTargetMode(null)
+    }, 15)
+  }
+
+  const handlePreviewClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (!targetMode || !activePage) return
+    const target = e.target as HTMLElement
+    const text = target.textContent?.trim()
+    if (text && activePage.content.includes(text)) {
+      const idx = activePage.content.indexOf(text)
+      if (targetMode === 'bookmark') {
+        applyBookmarkAtPos(selectedColor, idx)
+      } else {
+        applyHighlightRange(selectedColor, idx, idx + text.length)
+      }
+      setTargetMode(null)
+    }
+  }
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && targetMode) {
+        setTargetMode(null)
+        onShowToast?.('Target selection mode cancelled')
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [targetMode])
+
+  const handleBallMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    setIsDragging(true)
+    dragStartRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      ballX: ballPos.x,
+      ballY: ballPos.y
+    }
+    hasMovedRef.current = false
+  }
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragStartRef.current) return
+      const dx = e.clientX - dragStartRef.current.mouseX
+      const dy = e.clientY - dragStartRef.current.mouseY
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        hasMovedRef.current = true
+      }
+      if (hasMovedRef.current) {
+        const dockW = ballExpanded ? 340 : 48
+        const dockH = ballExpanded ? 48 : 48
+        const newX = Math.max(8, Math.min(window.innerWidth - dockW - 8, dragStartRef.current.ballX + dx))
+        const newY = Math.max(8, Math.min(window.innerHeight - dockH - 8, dragStartRef.current.ballY + dy))
+        setBallPos({ x: newX, y: newY })
+      }
+    }
+
+    const handleMouseUp = () => {
+      dragStartRef.current = null
+      setIsDragging(false)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [ballExpanded])
+
+  const jumpToBookmark = (bm: { color: string; text: string; raw: string; index: number }) => {
+    setShowBookmarksMenu(false)
+    if (preview && markdownPreview.current) {
+      const pins = Array.from(markdownPreview.current.querySelectorAll('.bm-pin'))
+      const match = pins.find(p => p.textContent?.toLowerCase().includes(bm.color)) || pins[0]
+      if (match) {
+        match.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        match.classList.add('bm-flash')
+        setTimeout(() => match.classList.remove('bm-flash'), 1600)
+      }
+    } else if (editor.current) {
+      editor.current.focus()
+      const pos = activePage ? activePage.content.indexOf(bm.raw) : -1
+      if (pos !== -1) {
+        editor.current.setSelectionRange(pos, pos + bm.raw.length)
+        const linesBefore = activePage!.content.slice(0, pos).split('\n').length
+        editor.current.scrollTop = Math.max(0, (linesBefore - 3) * 24)
+      }
+    }
+    onShowToast?.(`Jumped to ${bm.color} bookmark`)
+  }
+
+  const removeBookmark = (rawTag: string) => {
+    if (!activePage) return
+    setHistoryStack(prev => [...prev.slice(-30), activePage.content])
+    const newContent = activePage.content.replace(rawTag, '')
+    onUpdatePageField('content', newContent)
+    onShowToast?.('Bookmark removed')
+  }
+
+  const handleResetFormat = () => {
+    if (!activePage) return
+    const text = activePage.content
+    const clean = text
+      .replace(/<mark\s+class="hl-[^"]*">([\s\S]*?)<\/mark>/gi, '$1')
+      .replace(/<span\s+class="bm-pin[^"]*"[^>]*>.*?<\/span>\s*/gi, '')
+    if (clean === text) {
+      onShowToast?.('Document has no highlights or bookmarks to reset.')
+      return
+    }
+    setHistoryStack(prev => [...prev.slice(-30), text])
+    onUpdatePageField('content', clean)
+    onShowToast?.('Document format reset to clean markdown.')
+  }
+
+  const handleUndo = () => {
+    if (historyStack.length === 0 || !activePage) return
+    const previous = historyStack[historyStack.length - 1]
+    setHistoryStack(prev => prev.slice(0, -1))
+    onUpdatePageField('content', previous)
+    onShowToast?.('Undid last highlight or bookmark action.')
+  }
+
+  const handleSaveHighlight = () => {
+    if (!activePage) return
+    setJustSaved(true)
+    setTimeout(() => setJustSaved(false), 2000)
+    onShowToast?.('Highlights and bookmarks saved successfully!')
+  }
 
   return (
     <div className={`ws-shell theme-${theme} ${isDark ? 'dark-mode' : ''}`}>
@@ -542,13 +848,148 @@ export function Workspace({
                   <button className="ws-text-btn" onClick={onShareNote}><Share2 size={12} /> Share</button>
                   <button className="ws-text-btn" onClick={() => onCopy(activePage.content, 'Content copied')}><Copy size={12} /> Copy</button>
                 </div>
+                {/* Highlighter & Bookmark toolbar */}
+                <div className="ws-hl-toolbar" role="toolbar" aria-label="Highlight and Bookmark Tools">
+                  <div className="ws-hl-group">
+                    <span className="ws-hl-label">Color:</span>
+                    <div className="ws-hl-swatches">
+                      {HIGHLIGHT_COLORS.map(c => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className={`ws-hl-swatch ${c.id} ${selectedColor === c.id ? 'active' : ''}`}
+                          onClick={() => handleSwatchClick(c.id)}
+                          title={`Select ${c.label} (${c.id})`}
+                          aria-label={c.label}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className={`ws-hl-action-btn ${targetMode === 'highlight' ? 'active-target' : ''}`}
+                    onClick={() => applyHighlight(selectedColor)}
+                    title={targetMode === 'highlight' ? 'Highlight mode active — click any line or drag to highlight (or Esc to cancel)' : 'Highlight selected text or click a line'}
+                  >
+                    <Highlighter size={13} />
+                    <span>{targetMode === 'highlight' ? 'Pick a line…' : 'Highlight'}</span>
+                  </button>
+
+                  <div className="ws-hl-divider" />
+
+                  <button
+                    type="button"
+                    className={`ws-hl-action-btn ws-bm-btn ${targetMode === 'bookmark' ? 'active-target' : ''}`}
+                    onClick={() => applyBookmark(selectedColor)}
+                    title={targetMode === 'bookmark' ? 'Bookmark mode active — click the exact line to bookmark (or Esc to cancel)' : `Bookmark line with ${selectedColor}`}
+                  >
+                    <Bookmark size={13} />
+                    <span>{targetMode === 'bookmark' ? 'Pick a line…' : 'Bookmark line'}</span>
+                  </button>
+
+                  {bookmarks.length > 0 && (
+                    <div className="ws-bm-menu-wrapper" ref={bmMenuRef}>
+                      <button
+                        type="button"
+                        className={`ws-hl-action-btn ws-bm-badge-btn ${showBookmarksMenu ? 'active' : ''}`}
+                        onClick={() => setShowBookmarksMenu(!showBookmarksMenu)}
+                        title="View all bookmarked lines"
+                      >
+                        <BookmarkCheck size={13} />
+                        <span>Bookmarks</span>
+                        <span className="ws-bm-count">{bookmarks.length}</span>
+                      </button>
+
+                      {showBookmarksMenu && (
+                        <div className="ws-bm-dropdown">
+                          <div className="ws-bm-dropdown-header">
+                            <span>Bookmarked lines ({bookmarks.length})</span>
+                            <button
+                              type="button"
+                              className="ws-bm-close"
+                              onClick={() => setShowBookmarksMenu(false)}
+                              aria-label="Close bookmarks"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                          <div className="ws-bm-list">
+                            {bookmarks.map((bm, i) => (
+                              <div
+                                key={i}
+                                className="ws-bm-item"
+                                onClick={() => jumpToBookmark(bm)}
+                                title="Click to jump to this line"
+                              >
+                                <span className={`ws-bm-dot ${bm.color}`} />
+                                <span className="ws-bm-item-text">{bm.text}</span>
+                                <button
+                                  type="button"
+                                  className="ws-bm-item-del"
+                                  onClick={e => {
+                                    e.stopPropagation()
+                                    removeBookmark(bm.raw)
+                                  }}
+                                  title="Remove bookmark"
+                                  aria-label="Remove bookmark"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="ws-hl-spacer" />
+
+                  <button
+                    type="button"
+                    className="ws-hl-tool-btn"
+                    onClick={handleUndo}
+                    disabled={historyStack.length === 0}
+                    title={historyStack.length > 0 ? "Undo last highlight/bookmark" : "Nothing to undo"}
+                  >
+                    <RotateCcw size={13} />
+                    <span>Undo</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`ws-hl-tool-btn ws-hl-save-btn ${justSaved ? 'saved' : ''}`}
+                    onClick={handleSaveHighlight}
+                    title="Save current highlights & bookmarks"
+                  >
+                    <Check size={13} />
+                    <span>{justSaved ? 'Saved!' : 'Save'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="ws-hl-tool-btn ws-hl-reset-btn"
+                    onClick={handleResetFormat}
+                    title="Reset to old document format (removes all highlights and bookmarks)"
+                  >
+                    <Eraser size={13} />
+                    <span>Reset format</span>
+                  </button>
+                </div>
                 {preview
-                  ? <article ref={markdownPreview} className="ws-markdown-preview" dangerouslySetInnerHTML={{ __html: markdownHtml }} />
+                  ? <article
+                      ref={markdownPreview}
+                      className={`ws-markdown-preview ${targetMode ? 'ws-targeting-active' : ''}`}
+                      onClick={handlePreviewClick}
+                      dangerouslySetInnerHTML={{ __html: markdownHtml }}
+                    />
                   : <textarea
                       ref={editor}
-                      className="ws-note-editor"
+                      className={`ws-note-editor ${targetMode ? 'ws-targeting-active' : ''}`}
                       value={activePage.content}
                       onChange={e => onUpdatePageField('content', e.target.value)}
+                      onClick={handleEditorClick}
                       placeholder="Write in Markdown, paste a ```mermaid flowchart, or just start typing…"
                       spellCheck={false}
                       aria-label="Note content"
@@ -589,6 +1030,107 @@ export function Workspace({
         {activePage && <article className="print-note"><h1>{activePage.title || 'Untitled'}</h1><div dangerouslySetInnerHTML={{ __html: markdownHtml }} /></article>}
         <footer className="print-footer"><span className="print-logo">n.</span><span>Note Packet · <a href="https://notepacket.vercel.app">notepacket.vercel.app</a></span></footer>
       </main>
+
+      {/* Draggable & Collapsible Floating Quick Ball Widget */}
+      <div
+        className={`ws-quick-ball-container ${ballExpanded ? 'expanded' : 'collapsed'} ${isDragging ? 'dragging' : ''}`}
+        style={{ left: `${ballPos.x}px`, top: `${ballPos.y}px` }}
+        role="region"
+        aria-label="Quick Highlight and Bookmark Ball"
+      >
+        {!ballExpanded ? (
+          <button
+            type="button"
+            className="ws-quick-ball"
+            onMouseDown={handleBallMouseDown}
+            onClick={() => {
+              if (!hasMovedRef.current) setBallExpanded(true)
+            }}
+            title="Quick Highlight & Bookmark Ball (drag to move, click to expand)"
+            style={{ '--ball-accent': HIGHLIGHT_COLORS.find(c => c.id === selectedColor)?.hex || '#EAB308' } as React.CSSProperties}
+          >
+            <div className="ws-quick-ball-inner">
+              <Highlighter size={16} />
+              <span className={`ws-quick-ball-dot ${selectedColor}`} />
+            </div>
+          </button>
+        ) : (
+          <div className="ws-quick-dock">
+            <div
+              className="ws-quick-dock-handle"
+              onMouseDown={handleBallMouseDown}
+              title="Drag dock anywhere"
+            >
+              <GripVertical size={14} />
+            </div>
+
+            <div className="ws-quick-dock-swatches">
+              {HIGHLIGHT_COLORS.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`ws-quick-swatch ${c.id} ${selectedColor === c.id ? 'active' : ''}`}
+                  onClick={() => handleSwatchClick(c.id)}
+                  title={c.label}
+                  aria-label={c.label}
+                />
+              ))}
+            </div>
+
+            <div className="ws-quick-dock-divider" />
+
+            <button
+              type="button"
+              className={`ws-quick-btn ${targetMode === 'highlight' ? 'active-target' : ''}`}
+              onClick={() => applyHighlight(selectedColor)}
+              title={targetMode === 'highlight' ? 'Click line to highlight (or click to cancel)' : 'Highlight (select text or click line)'}
+            >
+              <Highlighter size={13} />
+              <span>{targetMode === 'highlight' ? 'Pick line…' : 'Highlight'}</span>
+            </button>
+
+            <button
+              type="button"
+              className={`ws-quick-btn ws-quick-bm-btn ${targetMode === 'bookmark' ? 'active-target' : ''}`}
+              onClick={() => applyBookmark(selectedColor)}
+              title={targetMode === 'bookmark' ? 'Click line to bookmark (or click to cancel)' : 'Bookmark line'}
+            >
+              <Bookmark size={13} />
+              <span>{targetMode === 'bookmark' ? 'Pick line…' : 'Bookmark'}</span>
+            </button>
+
+            <div className="ws-quick-dock-divider" />
+
+            <button
+              type="button"
+              className="ws-quick-icon-btn"
+              onClick={handleUndo}
+              disabled={historyStack.length === 0}
+              title="Undo last format"
+            >
+              <RotateCcw size={13} />
+            </button>
+
+            <button
+              type="button"
+              className="ws-quick-icon-btn ws-quick-reset"
+              onClick={handleResetFormat}
+              title="Reset format"
+            >
+              <Eraser size={13} />
+            </button>
+
+            <button
+              type="button"
+              className="ws-quick-icon-btn ws-quick-collapse"
+              onClick={() => setBallExpanded(false)}
+              title="Collapse into ball"
+            >
+              <Minimize2 size={13} />
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Mobile FAB */}
       <button className="ws-fab" onClick={() => onAsk('page')} aria-label="New note">

@@ -1,7 +1,8 @@
 import React, { useRef } from 'react'
 import {
   Sun, Moon, ArrowRight, Upload, Zap, FolderOpen, Users,
-  Globe, CheckCircle, Lock, Key, AlertTriangle, ShieldCheck
+  Globe, CheckCircle, Lock, Key, AlertTriangle, ShieldCheck,
+  Highlighter, Bookmark, RotateCcw, Eraser
 } from 'lucide-react'
 import type { Notebook } from './types'
 
@@ -98,6 +99,7 @@ export function LandingPage({
           <div className="hero-trust">
             <span><CheckCircle size={13} /> 6 Custom visual themes</span>
             <span><CheckCircle size={13} /> Markdown + Mermaid</span>
+            <span><CheckCircle size={13} /> Multi-Color Highlighters & Bookmarks</span>
             <span><CheckCircle size={13} /> .ntid identity keys</span>
             <span><CheckCircle size={13} /> PIN-protected privacy</span>
           </div>
@@ -139,7 +141,10 @@ export function LandingPage({
                 <div className="preview-note-title">Welcome to Note Packet</div>
                 <div className="preview-note-content">
                   <div className="preview-h2">## Getting started</div>
-                  <div className="preview-p">Paste Markdown, code snippets, or Mermaid charts. Pick Claude, ChatGPT, or Cyberpunk theme!</div>
+                  <div className="preview-p">
+                    <span className="bm-pin bm-yellow" style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px' }}>🔖 PINNED</span>
+                    Highlight key ideas using <mark className="hl-yellow" style={{ padding: '1px 5px', borderRadius: '3px' }}>Shift + Arrow keys</mark> or mouse drag!
+                  </div>
                   <div className="preview-code"><code>const theme = 'cyberpunk';</code></div>
                 </div>
                 <div className="preview-sticky-accent">💡 Autosaved</div>
@@ -154,6 +159,16 @@ export function LandingPage({
           <div className="section-eyebrow">WHAT YOU GET</div>
           <h2 className="section-title">Built for how you actually think</h2>
           <div className="features-grid">
+            <div className="feature-card">
+              <div className="feature-icon"><Highlighter size={22} /></div>
+              <h3>Multi-color highlighter</h3>
+              <p>Drag or use Shift+Arrow keys to select text. Highlight key points in Canary Yellow, Emerald, Pink, Sky Cyan, or Sunset Amber with instant undo and save.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon"><Bookmark size={22} /></div>
+              <h3>Smart bookmarks & format reset</h3>
+              <p>Pin color-coded bookmarks to any line and jump to them from the bookmarks menu. Click Reset Format to revert back to your original clean text anytime.</p>
+            </div>
             <div className="feature-card">
               <div className="feature-icon"><Zap size={22} /></div>
               <h3>Instant capture</h3>
